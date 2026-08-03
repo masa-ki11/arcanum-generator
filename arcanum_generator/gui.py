@@ -36,6 +36,7 @@ from .storage import (
 APP_TITLE = "戦国炎舞 奥義割り振り"
 STRATEGIST_MARK = "軍"
 FIRST_HALF_MARK = "★"
+VANGUARD_MARK = "前"
 JSON_FILETYPES = [("割り振り設定", "*.json"), ("すべてのファイル", "*.*")]
 CSV_FILETYPES = [("CSVファイル", "*.csv"), ("すべてのファイル", "*.*")]
 
@@ -52,6 +53,13 @@ PREFERRED_WINDOW_W, PREFERRED_WINDOW_H = 1280, 760
 MIN_WINDOW_W, MIN_WINDOW_H = 1040, 600
 # メニューバー・Dock・タスクバーに隠れないよう空けておく余白。
 SCREEN_MARGIN_W, SCREEN_MARGIN_H = 80, 140
+
+
+def _arcanum_marks(first_half: bool, for_vanguard: bool) -> str:
+    """奥義に付いた印(★=前半必須 / 前=前衛向け)をまとめて1つの文字列にする."""
+    return (FIRST_HALF_MARK if first_half else "") + (
+        VANGUARD_MARK if for_vanguard else ""
+    )
 
 
 class BulkAddDialog(tk.Toplevel):
@@ -264,13 +272,13 @@ class ArcanumApp(tk.Tk):
             show="headings",
             selectmode="browse",
         )
-        self.arcana_tree.heading("first_half", text="前半")
+        self.arcana_tree.heading("first_half", text="印")
         self.arcana_tree.heading("name", text="奥義名")
         self.arcana_tree.heading("category", text="種類")
         self.arcana_tree.heading("required", text="必要人数")
         # 幅を固定しておかないと、パネルが狭いとき「必要人数」列が隠れたまま
         # 横スクロールもできず辿り着けなくなる。
-        self.arcana_tree.column("first_half", width=38, anchor="center", stretch=False)
+        self.arcana_tree.column("first_half", width=46, anchor="center", stretch=False)
         self.arcana_tree.column("name", width=110, anchor="w", stretch=False)
         self.arcana_tree.column("category", width=104, anchor="w", stretch=False)
         # 最後の列は伸ばして余白を埋めつつ、minwidth を下回ると横スクロールに回す。
@@ -284,6 +292,7 @@ class ArcanumApp(tk.Tk):
         self.arcanum_required_var = tk.IntVar(value=DEFAULT_REQUIRED)
         self.arcanum_category_var = tk.StringVar(value=DEFAULT_CATEGORY)
         self.arcanum_first_half_var = tk.BooleanVar(value=False)
+        self.arcanum_for_vanguard_var = tk.BooleanVar(value=False)
 
         # grid にして、狭いときは名前欄だけが縮むようにする。pack(side="left") だと
         # Entry が要求幅を譲らず、後ろに置いた「追加」ボタンが枠外に消える。
@@ -325,9 +334,14 @@ class ArcanumApp(tk.Tk):
         first_half_row = ttk.Frame(frame)
         ttk.Checkbutton(
             first_half_row,
-            text=f"{FIRST_HALF_MARK} 前半必須(◎優先)",
+            text=f"{FIRST_HALF_MARK} 前半必須",
             variable=self.arcanum_first_half_var,
         ).pack(side="left")
+        ttk.Checkbutton(
+            first_half_row,
+            text=f"{VANGUARD_MARK} 前衛に割振",
+            variable=self.arcanum_for_vanguard_var,
+        ).pack(side="left", padx=(10, 0))
 
         buttons = ttk.Frame(frame)
         ttk.Button(buttons, text="選択中を更新", command=self.update_arcanum).pack(
@@ -364,18 +378,22 @@ class ArcanumApp(tk.Tk):
 
         member_box = ttk.Frame(frame)
         battle_columns = tuple(f"b{i}" for i in range(BATTLE_COUNT))
+        vanguard_columns = tuple(f"v{i}" for i in range(BATTLE_COUNT))
         self.member_tree = ttk.Treeview(
             member_box,
-            columns=battle_columns + ("strategist", "name"),
+            columns=battle_columns + vanguard_columns + ("strategist", "name"),
             show="headings",
             selectmode="extended",
         )
         for i, column in enumerate(battle_columns):
             self.member_tree.heading(column, text=f"{i + 1}戦")
-            self.member_tree.column(column, width=38, anchor="center", stretch=False)
-        self.member_tree.heading("strategist", text="軍師")
+            self.member_tree.column(column, width=36, anchor="center", stretch=False)
+        for i, column in enumerate(vanguard_columns):
+            self.member_tree.heading(column, text=f"前{i + 1}")
+            self.member_tree.column(column, width=32, anchor="center", stretch=False)
+        self.member_tree.heading("strategist", text="軍")
         self.member_tree.heading("name", text="名前")
-        self.member_tree.column("strategist", width=42, anchor="center", stretch=False)
+        self.member_tree.column("strategist", width=30, anchor="center", stretch=False)
         self.member_tree.column("name", width=110, minwidth=110, anchor="w", stretch=True)
         self.member_tree.tag_configure("absent", foreground="#909090")
         self.member_tree.tag_configure("strategist", foreground="#8e44ad")
@@ -386,7 +404,8 @@ class ArcanumApp(tk.Tk):
         hint = ttk.Label(
             frame,
             text=(
-                "戦の列をダブルクリックでその戦を ◎→〇→△→×→－ と切り替え / "
+                "1戦〜3戦の列をダブルクリックで ◎→〇→△→×→－ と切り替え / "
+                "前1〜前3の列をダブルクリックで前衛の切り替え / "
                 "「一括」で名前をまとめて貼り付け"
             ),
             foreground="#666666",
@@ -407,6 +426,13 @@ class ArcanumApp(tk.Tk):
         ttk.Button(editor, text="一括", command=self.bulk_add_members).grid(
             row=0, column=2, padx=(4, 0)
         )
+        # 並べ替えもここに置く。ボタン行に集めると狭い画面で入り切らない。
+        ttk.Button(
+            editor, text="↑", width=3, command=lambda: self.move_members(-1)
+        ).grid(row=0, column=3, padx=(6, 0))
+        ttk.Button(
+            editor, text="↓", width=3, command=lambda: self.move_members(1)
+        ).grid(row=0, column=4, padx=(2, 0))
         editor.columnconfigure(0, weight=1)
 
         buttons = ttk.Frame(frame)
@@ -415,11 +441,8 @@ class ArcanumApp(tk.Tk):
             side="left", padx=(6, 0)
         )
         ttk.Button(
-            buttons, text="↑", width=3, command=lambda: self.move_members(-1)
+            buttons, text="前衛", command=lambda: self.toggle_vanguard()
         ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            buttons, text="↓", width=3, command=lambda: self.move_members(1)
-        ).pack(side="left", padx=(2, 0))
 
         # ◎〇△×－ ボタンとスペースキーが、どの戦に効くかをここで決める。
         target_row = ttk.Frame(frame)
@@ -490,14 +513,14 @@ class ArcanumApp(tk.Tk):
             height=12,
         )
         self.result_tree.heading("category", text="種類")
-        self.result_tree.heading("first_half", text="前半")
+        self.result_tree.heading("first_half", text="印")
         self.result_tree.heading("arcanum", text="奥義")
         self.result_tree.heading("required", text="人数")
         # 数字=確実に出せる人数(◎〇)、△=△頼み、×=誰も出せない
         self.result_tree.heading("per_battle", text="確実 1/2/3戦")
         self.result_tree.heading("members", text="担当者")
         self.result_tree.column("category", width=100, anchor="w", stretch=False)
-        self.result_tree.column("first_half", width=40, anchor="center", stretch=False)
+        self.result_tree.column("first_half", width=46, anchor="center", stretch=False)
         self.result_tree.column("arcanum", width=110, anchor="w", stretch=False)
         self.result_tree.column("required", width=48, anchor="center", stretch=False)
         self.result_tree.column("per_battle", width=84, anchor="center", stretch=False)
@@ -516,6 +539,7 @@ class ArcanumApp(tk.Tk):
         load_box = ttk.Frame(frame)
         self.load_tree = ttk.Treeview(
             load_box,
+            # 前衛は出力に含めない(連合員パネルで設定・確認する)。
             columns=tuple(f"lb{i}" for i in range(BATTLE_COUNT))
             + ("name", "count", "arcana"),
             show="headings",
@@ -523,7 +547,7 @@ class ArcanumApp(tk.Tk):
         )
         for i in range(BATTLE_COUNT):
             self.load_tree.heading(f"lb{i}", text=f"{i + 1}戦")
-            self.load_tree.column(f"lb{i}", width=38, anchor="center", stretch=False)
+            self.load_tree.column(f"lb{i}", width=36, anchor="center", stretch=False)
         self.load_tree.heading("name", text="メンバー")
         self.load_tree.heading("count", text="担当数")
         self.load_tree.heading("arcana", text="担当奥義")
@@ -569,6 +593,7 @@ class ArcanumApp(tk.Tk):
                 required=required,
                 category=self.arcanum_category_var.get(),
                 first_half=self.arcanum_first_half_var.get(),
+                for_vanguard=self.arcanum_for_vanguard_var.get(),
             )
         )
         self.arcanum_name_var.set("")
@@ -593,6 +618,7 @@ class ArcanumApp(tk.Tk):
             required=self._read_spin(self.arcanum_required_var, DEFAULT_REQUIRED),
             category=self.arcanum_category_var.get(),
             first_half=self.arcanum_first_half_var.get(),
+            for_vanguard=self.arcanum_for_vanguard_var.get(),
         )
         self._changed()
         self._refresh_arcana(select=index)
@@ -626,6 +652,7 @@ class ArcanumApp(tk.Tk):
         self.arcanum_required_var.set(arcanum.required)
         self.arcanum_category_var.set(arcanum.category)
         self.arcanum_first_half_var.set(arcanum.first_half)
+        self.arcanum_for_vanguard_var.set(arcanum.for_vanguard)
 
     def sort_arcana_by_category(self) -> None:
         """奥義一覧を種類ごとにまとめ直す(種類の中の並びは今の順を保つ)."""
@@ -767,6 +794,25 @@ class ArcanumApp(tk.Tk):
         self._changed()
         self._refresh_members(select=sorted(selected))
 
+    def toggle_vanguard(self, battle: int | None = None) -> None:
+        """前衛かどうかを切り替える.
+
+        battle を渡すとその戦だけ、省略すると「対象」で選ばれた戦を切り替える。
+        混在しているときは「前衛にする」に揃える。
+        """
+        indexes = self._selected_indexes(self.member_tree)
+        if not indexes:
+            return
+        battles = [battle] if battle is not None else self._target_battles()
+        make_vanguard = not all(
+            self.roster.members[i].vanguard[b] for i in indexes for b in battles
+        )
+        for index in indexes:
+            for target in battles:
+                self.roster.members[index].vanguard[target] = make_vanguard
+        self._changed()
+        self._refresh_members(select=indexes)
+
     def toggle_strategist(self) -> None:
         """選択中のメンバーの軍師フラグを切り替える. 軍師には奥義を割り当てない."""
         indexes = self._selected_indexes(self.member_tree)
@@ -786,14 +832,20 @@ class ArcanumApp(tk.Tk):
         if not row:
             return
         self.member_tree.selection_set(row)
-        # 戦の列を叩いたときはその戦だけ、それ以外の列なら「対象」に従う。
         column = self.member_tree.identify_column(event.x)
         try:
             position = int(column.lstrip("#")) - 1
         except ValueError:
             position = -1
-        battle = position if 0 <= position < BATTLE_COUNT else None
-        self.cycle_attendance(battle)
+        if 0 <= position < BATTLE_COUNT:
+            # 参戦の列 → その戦の参戦状況を送る。
+            self.cycle_attendance(position)
+        elif BATTLE_COUNT <= position < BATTLE_COUNT * 2:
+            # 前衛の列 → その戦の前衛を切り替える。
+            self.toggle_vanguard(position - BATTLE_COUNT)
+        else:
+            # 名前や軍師の列なら「対象」に従って参戦状況を送る。
+            self.cycle_attendance(None)
 
     # ------------------------------------------------------------------
     # 割り振り
@@ -943,7 +995,7 @@ class ArcanumApp(tk.Tk):
                 "end",
                 iid=str(index),
                 values=(
-                    FIRST_HALF_MARK if arcanum.first_half else "",
+                    _arcanum_marks(arcanum.first_half, arcanum.for_vanguard),
                     arcanum.name,
                     arcanum.category,
                     # 余り埋め専用の種類は必要人数を持たない。
@@ -971,6 +1023,7 @@ class ArcanumApp(tk.Tk):
                 iid=str(index),
                 values=(
                     *member.attendance,
+                    *(VANGUARD_MARK if v else "" for v in member.vanguard),
                     STRATEGIST_MARK if member.is_strategist else "",
                     member.name,
                 ),
@@ -997,7 +1050,11 @@ class ArcanumApp(tk.Tk):
         for row, (_, assignment) in enumerate(ordered):
             if assignment.is_short or assignment.thin_battles:
                 tags: tuple[str, ...] = ("short",)
-            elif assignment.unsure_battles or assignment.uncovered_first_half:
+            elif (
+                assignment.unsure_battles
+                or assignment.uncovered_first_half
+                or assignment.uncovered_vanguard
+            ):
                 tags = ("nobest",)
             elif assignment.extra:
                 tags = ("fill",)
@@ -1009,7 +1066,7 @@ class ArcanumApp(tk.Tk):
                 iid=str(row),
                 values=(
                     assignment.category,
-                    FIRST_HALF_MARK if assignment.first_half else "",
+                    _arcanum_marks(assignment.first_half, assignment.for_vanguard),
                     assignment.arcanum,
                     (
                         f"{len(assignment.members)}"
@@ -1053,7 +1110,8 @@ class ArcanumApp(tk.Tk):
         for battle in range(BATTLE_COUNT):
             counts = self.roster.count_by_attendance(battle)
             inner = " ".join(f"{lv}{counts[lv]}" for lv in ATTENDANCE_LEVELS)
-            battle_parts.append(f"{BATTLE_LABELS[battle]} {inner}")
+            vanguards = len(self.roster.vanguards(battle))
+            battle_parts.append(f"{BATTLE_LABELS[battle]} {inner} 前衛{vanguards}")
         self.battle_status_var.set("参戦: " + " ／ ".join(battle_parts))
         errors = validate(self.roster)
         if errors:

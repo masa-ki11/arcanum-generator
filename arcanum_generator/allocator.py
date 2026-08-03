@@ -33,6 +33,11 @@ class Assignment:
     members: list[str] = field(default_factory=list)
     category: str = ""
     first_half: bool = False
+    for_vanguard: bool = False
+    vanguard_battles: list[bool] = field(
+        default_factory=lambda: [False] * BATTLE_COUNT
+    )
+    """戦ごとに、その戦に参戦している前衛の担当がいるか."""
     per_battle: list[int] = field(default_factory=lambda: [0] * BATTLE_COUNT)
     """戦ごとの「出る見込みのある担当者(◎〇△)」の人数."""
     sure_per_battle: list[int] = field(default_factory=lambda: [0] * BATTLE_COUNT)
@@ -74,6 +79,13 @@ class Assignment:
         return [i for i, covered in enumerate(self.best_battles) if not covered]
 
     @property
+    def uncovered_vanguard(self) -> list[int]:
+        """前衛向けなのに前衛の担当がいない戦."""
+        if not self.for_vanguard:
+            return []
+        return [i for i, covered in enumerate(self.vanguard_battles) if not covered]
+
+    @property
     def is_short(self) -> bool:
         """必要人数に届かなかった奥義かどうか."""
         return len(self.members) < self.required
@@ -101,7 +113,9 @@ class AllocationResult:
     fill_capacity: int = 0
     """余り埋めまで含めた枠の総数(軍師以外の全員 × 1人あたりの枠)."""
     attendance: dict[str, str] = field(default_factory=dict)
-    """メンバー名 -> 参戦状況."""
+    """メンバー名 -> 戦ごとの参戦状況."""
+    vanguard: dict[str, list[bool]] = field(default_factory=dict)
+    """メンバー名 -> 戦ごとの前衛設定."""
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -232,14 +246,44 @@ class _Allocator:
         """その人を足すと、確実に出せるようになる戦の数."""
         return sum(1 for battle in unsure if self.member[name].is_sure(battle))
 
+    def uncovered_vanguard(self, arcanum: Arcanum) -> set[int]:
+        """前衛の担当(その戦に参戦していて前衛)がいない戦."""
+        covered = {
+            battle
+            for name in self.picked[arcanum.name]
+            for battle in range(BATTLE_COUNT)
+            if self.member[name].is_vanguard(battle)
+            and self.member[name].joins(battle)
+        }
+        return set(range(BATTLE_COUNT)) - covered
+
+    def is_eligible(self, arcanum: Arcanum, name: str) -> bool:
+        """その奥義の担当になれる人か.
+
+        前衛向けの奥義は、前衛として出る戦が1つでもある人にしか付けない。
+        後衛の人に持たせても意味がないので、人数が足りなければ担当を減らす。
+        """
+        if not arcanum.for_vanguard:
+            return True
+        return self.member[name].can_be_vanguard()
+
+    def _vanguard_gain(self, name: str, uncovered: set[int]) -> int:
+        """その人を足すと、前衛の担当が付く戦の数."""
+        who = self.member[name]
+        return sum(
+            1 for battle in uncovered if who.is_vanguard(battle) and who.joins(battle)
+        )
+
     def _sort_key(
         self,
         arcanum: Arcanum,
         name: str,
         uncovered: set[int],
+        rearguard: set[int],
         unsure: set[int],
         thin: set[int],
         need_best_gain: bool,
+        need_vanguard_gain: bool,
         need_sure_gain: bool,
         need_join_gain: bool,
     ):
@@ -254,16 +298,21 @@ class _Allocator:
         load = len(self.load[name])
         score = self.member[name].priority_score()
         best_gain = -self._best_gain(name, uncovered)
+        van_gain = -self._vanguard_gain(name, rearguard)
         sure_gain = -self._sure_gain(name, unsure)
         join_gain = -self._join_gain(name, thin)
         if need_best_gain:
-            return (best_gain, sure_gain, score, load)
+            return (best_gain, van_gain, sure_gain, score, load)
+        if need_vanguard_gain:
+            return (van_gain, sure_gain, load, score)
         if need_sure_gain:
             return (sure_gain, load, score)
         if need_join_gain:
             return (join_gain, load, score)
         if arcanum.first_half:
-            return (best_gain, load, sure_gain, score)
+            return (best_gain, van_gain, load, sure_gain, score)
+        if arcanum.for_vanguard:
+            return (van_gain, load, sure_gain, score)
         return (load, sure_gain, join_gain, score)
 
     def _choose(
@@ -271,6 +320,7 @@ class _Allocator:
         arcanum: Arcanum,
         pool: list[str],
         need_best_gain: bool = False,
+        need_vanguard_gain: bool = False,
         need_sure_gain: bool = False,
         need_join_gain: bool = False,
     ) -> str | None:
@@ -281,6 +331,7 @@ class _Allocator:
             for name in pool
             if name not in held
             and len(self.load[name]) < self.roster.slots_per_member
+            and self.is_eligible(arcanum, name)
         ]
         if not candidates:
             return None
@@ -288,6 +339,7 @@ class _Allocator:
         self.rng.shuffle(candidates)
 
         uncovered = self.uncovered_first_half(arcanum) if arcanum.first_half else set()
+        rearguard = self.uncovered_vanguard(arcanum) if arcanum.for_vanguard else set()
         unsure = self.unsure_battles(arcanum)
         thin = self.thin_battles(arcanum)
 
@@ -295,6 +347,10 @@ class _Allocator:
             if not arcanum.first_half:
                 return None
             candidates = [n for n in candidates if self._best_gain(n, uncovered)]
+        if need_vanguard_gain:
+            if not arcanum.for_vanguard:
+                return None
+            candidates = [n for n in candidates if self._vanguard_gain(n, rearguard)]
         if need_sure_gain:
             candidates = [n for n in candidates if self._sure_gain(n, unsure)]
         if need_join_gain:
@@ -308,9 +364,11 @@ class _Allocator:
                 arcanum,
                 n,
                 uncovered,
+                rearguard,
                 unsure,
                 thin,
                 need_best_gain,
+                need_vanguard_gain,
                 need_sure_gain,
                 need_join_gain,
             ),
@@ -320,19 +378,35 @@ class _Allocator:
         self,
         arcanum: Arcanum,
         need_best_gain: bool = False,
+        need_vanguard_gain: bool = False,
         need_sure_gain: bool = False,
         need_join_gain: bool = False,
     ) -> bool:
         """◎〇から1人充てる. いなければ△から充てる. どちらも無理なら False."""
         for pool in (self.primary, self.fallback):
             name = self._choose(
-                arcanum, pool, need_best_gain, need_sure_gain, need_join_gain
+                arcanum,
+                pool,
+                need_best_gain,
+                need_vanguard_gain,
+                need_sure_gain,
+                need_join_gain,
             )
             if name is not None:
                 self.load[name].append(arcanum.name)
                 self.picked[arcanum.name].append(name)
                 return True
         return False
+
+    def cover_vanguard(self, arcanum: Arcanum) -> None:
+        """前衛向けの奥義に、各戦の前衛担当が1人以上入るまで足す.
+
+        前衛は戦ごとに変わるので、1人で3戦ぶんまかなえるとは限らない。
+        必要人数を超えることがある。前衛が足りなければ諦めて警告に回す。
+        """
+        while self.uncovered_vanguard(arcanum):
+            if not self.assign_one(arcanum, need_vanguard_gain=True):
+                return
 
     def cover_battles(self, arcanum: Arcanum) -> None:
         """どの戦にも確実に出せる担当(◎〇)が1人以上いるまで足す.
@@ -384,7 +458,11 @@ class _Allocator:
 
             for arcanum in fill_arcana:
                 held = set(self.picked[arcanum.name])
-                candidates = [n for n in free if n not in held]
+                candidates = [
+                    n
+                    for n in free
+                    if n not in held and self.is_eligible(arcanum, n)
+                ]
                 if not candidates:
                     continue
                 self.rng.shuffle(candidates)
@@ -407,19 +485,20 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
     奥義は1日通して変えない前提なので、割り振りは1回だけ行い、その結果を
     3戦すべてで使う。参戦状況だけが戦ごとに変わる。
 
-    5段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
-    段階1〜4では一切枠を取らず、段階5の余り埋めでだけ配る。
+    6段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
+    段階1〜5では一切枠を取らず、段階6の余り埋めでだけ配る。
 
     1. 「瞬時(何度も)」以外の全奥義に1人ずつ確保する(カバレッジ優先)。
-       前半必須の奥義を先に処理し、そこには◎の人を優先して充てる。
+       前半必須・前衛向けの奥義を先に処理する。
        担当は◎〇から選び、足りなければ△も使う。
     2. 前半必須の奥義に、各戦の◎が1人以上入るまで担当を足す。
-    3. どの奥義も、各戦に出られる担当が1人以上いるまで足す。
-    4. 余裕のある奥義から必要人数(既定2人)まで増やす。ここで人手が尽きた奥義は
+    3. 前衛向けの奥義に、各戦の前衛担当が1人以上入るまで担当を足す。
+    4. どの奥義も、各戦に出られる担当が1人以上いるまで足す。
+    5. 余裕のある奥義から必要人数(既定2人)まで増やす。ここで人手が尽きた奥義は
        1人担当のままになる — 足りない分だけ2人体制を撤回する。
-    5. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
+    6. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
 
-    段階2と3は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
+    段階2〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
     その戦は穴になるので、人数を揃えるより穴を塞ぐほうを先に済ませる。
 
     seed を指定すると割り振りが再現可能になる。
@@ -430,10 +509,10 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
 
     work = _Allocator(roster, random.Random(seed))
 
-    # 必ず確保する奥義だけを、前半必須から順に処理する。
+    # 必ず確保する奥義だけを、制約のきついものから順に処理する。
     ordered = sorted(
         roster.required_arcana(),
-        key=lambda a: (not a.first_half, -a.required, a.name),
+        key=lambda a: (not a.first_half, not a.for_vanguard, -a.required, a.name),
     )
 
     for arcanum in ordered:  # 段階1
@@ -444,14 +523,18 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
             work.cover_first_half(arcanum)
 
     for arcanum in ordered:  # 段階3
-        work.cover_battles(arcanum)
+        if arcanum.for_vanguard:
+            work.cover_vanguard(arcanum)
 
     for arcanum in ordered:  # 段階4
+        work.cover_battles(arcanum)
+
+    for arcanum in ordered:  # 段階5
         while len(work.picked[arcanum.name]) < arcanum.required:
             if not work.assign_one(arcanum):
                 break
 
-    work.fill_leftover()  # 段階5
+    work.fill_leftover()  # 段階6
 
     # 画面に並んでいる順で結果を返す。
     assignments = [
@@ -465,6 +548,7 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
         capacity=roster.capacity(),
         fill_capacity=roster.fill_capacity(),
         attendance={name: list(m.attendance) for name, m in work.member.items()},
+        vanguard={name: list(m.vanguard) for name, m in work.member.items()},
     )
     result.warnings = _build_warnings(roster, result)
     return result
@@ -477,11 +561,14 @@ def _build_assignment(
     per_battle = [0] * BATTLE_COUNT
     sure_per_battle = [0] * BATTLE_COUNT
     best = [False] * BATTLE_COUNT
+    vanguard = [False] * BATTLE_COUNT
     for name in picked:
         who = member[name]
         for battle in range(BATTLE_COUNT):
             if who.joins(battle):
                 per_battle[battle] += 1
+                if who.is_vanguard(battle):
+                    vanguard[battle] = True
             if who.is_sure(battle):
                 sure_per_battle[battle] += 1
         for battle in who.best_battles():
@@ -493,6 +580,8 @@ def _build_assignment(
         members=picked,
         category=arcanum.category,
         first_half=arcanum.first_half,
+        for_vanguard=arcanum.for_vanguard,
+        vanguard_battles=vanguard,
         per_battle=per_battle,
         sure_per_battle=sure_per_battle,
         best_battles=best,
@@ -538,6 +627,30 @@ def _build_warnings(roster: Roster, result: AllocationResult) -> list[str]:
     if thin:
         warnings.append(
             "担当者が誰も出られない戦がある奥義: " + "、".join(thin)
+        )
+
+    if any(a.for_vanguard for a in roster.arcana):
+        available = [m.name for m in roster.fill_members() if m.can_be_vanguard()]
+        short_vanguard = [
+            f"{a.arcanum}({len(a.members)}/{a.required}人)"
+            for a in mandatory
+            if a.for_vanguard and a.is_short
+        ]
+        if short_vanguard:
+            warnings.append(
+                f"前衛として出られる人が{len(available)}人しかおらず、"
+                "前衛向け奥義の担当が必要人数に届きませんでした: "
+                + "、".join(short_vanguard)
+            )
+
+    no_vanguard = [
+        f"{a.arcanum}({'、'.join(BATTLE_LABELS[b] for b in a.uncovered_vanguard)})"
+        for a in mandatory
+        if a.members and a.uncovered_vanguard
+    ]
+    if no_vanguard:
+        warnings.append(
+            "前衛向けなのに前衛の担当がいない戦があります: " + "、".join(no_vanguard)
         )
 
     unsure = [

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 6,
   "battle_count": 3,
   "slots_per_member": 4,
   "arcana": [
@@ -7,163 +7,211 @@
       "name": "孔明",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "竜章",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "兵法",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "中国",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "沖",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "四面",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "暗雲",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "堅忍",
       "required": 2,
       "category": "一定",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "啄木鳥",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "暴欲",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "土竜",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "月",
       "required": 2,
       "category": "一定",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "大華",
       "required": 2,
       "category": "一定",
-      "first_half": true
-    },
-    {
-      "name": "悪戯",
-      "required": 2,
-      "category": "瞬時(一度のみ)",
-      "first_half": true
+      "first_half": true,
+      "for_vanguard": false
     },
     {
       "name": "宴楽",
       "required": 2,
       "category": "瞬時(一度のみ)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "もちまる",
       "required": 2,
       "category": "瞬時(一度のみ)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": true
     },
     {
       "name": "心臓",
       "required": 2,
       "category": "瞬時(一度のみ)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": true
     },
     {
       "name": "猛虎",
       "required": 2,
       "category": "瞬時(何度も)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "栄枯",
       "required": 2,
       "category": "瞬時(何度も)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "天下",
       "required": 2,
       "category": "瞬時(何度も)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "花鳥",
       "required": 2,
       "category": "瞬時(何度も)",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "火竜",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "水竜",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "牛",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "モモ",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "羊",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
     },
     {
       "name": "猿",
       "required": 2,
       "category": "絆",
-      "first_half": false
+      "first_half": false,
+      "for_vanguard": false
+    },
+    {
+      "name": "ペン",
+      "required": 2,
+      "category": "絆",
+      "first_half": false,
+      "for_vanguard": false
+    },
+    {
+      "name": "蝙蝠",
+      "required": 2,
+      "category": "絆",
+      "first_half": false,
+      "for_vanguard": false
+    },
+    {
+      "name": "鯱",
+      "required": 2,
+      "category": "絆",
+      "first_half": false,
+      "for_vanguard": false
+    },
+    {
+      "name": "狼",
+      "required": 2,
+      "category": "絆",
+      "first_half": false,
+      "for_vanguard": false
     }
   ],
   "members": [
@@ -174,7 +222,12 @@
         "◎",
         "◎"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        true,
+        false
+      ]
     },
     {
       "name": "tama",
@@ -183,7 +236,12 @@
         "◎",
         "◎"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        true,
+        true,
+        true
+      ]
     },
     {
       "name": "ししゃも",
@@ -192,7 +250,12 @@
         "◎",
         "◎"
       ],
-      "is_strategist": true
+      "is_strategist": true,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
     },
     {
       "name": "ごうき",
@@ -201,7 +264,12 @@
         "◎",
         "◎"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
     },
     {
       "name": "kino",
@@ -210,7 +278,12 @@
         "△",
         "◎"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        true,
+        false,
+        true
+      ]
     },
     {
       "name": "さぁし",
@@ -219,7 +292,12 @@
         "◎",
         "－"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        true,
+        false,
+        false
+      ]
     },
     {
       "name": "華",
@@ -228,115 +306,12 @@
         "△",
         "△"
       ],
-      "is_strategist": false
-    },
-    {
-      "name": "ピコ",
-      "attendance": [
-        "◎",
-        "－",
-        "×"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "うらん",
-      "attendance": [
-        "◎",
-        "◎",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "ゼロ",
-      "attendance": [
-        "〇",
-        "◎",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "tetsu",
-      "attendance": [
-        "×",
-        "◎",
-        "×"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "ゆずぽこ",
-      "attendance": [
-        "〇",
-        "〇",
-        "〇"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "よっさん",
-      "attendance": [
-        "△",
-        "－",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "ふろん太",
-      "attendance": [
-        "－",
-        "◎",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "ゆうくん",
-      "attendance": [
-        "－",
-        "◎",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "九龍",
-      "attendance": [
-        "◎",
-        "－",
-        "－"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "B",
-      "attendance": [
-        "◎",
-        "－",
-        "〇"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "OMEGA",
-      "attendance": [
-        "◎",
-        "◎",
-        "◎"
-      ],
-      "is_strategist": false
-    },
-    {
-      "name": "つぐみ",
-      "attendance": [
-        "◎",
-        "△",
-        "◎"
-      ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
     },
     {
       "name": "BLUE",
@@ -345,7 +320,180 @@
         "△",
         "◎"
       ],
-      "is_strategist": false
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "ピコ",
+      "attendance": [
+        "◎",
+        "－",
+        "×"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "うらん",
+      "attendance": [
+        "◎",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "ゼロ",
+      "attendance": [
+        "〇",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "tetsu",
+      "attendance": [
+        "×",
+        "◎",
+        "×"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "name": "ゆずぽこ",
+      "attendance": [
+        "〇",
+        "〇",
+        "〇"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "よっさん",
+      "attendance": [
+        "△",
+        "－",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        true
+      ]
+    },
+    {
+      "name": "ふろん太",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "ゆうくん",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "九龍",
+      "attendance": [
+        "◎",
+        "－",
+        "－"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "B",
+      "attendance": [
+        "◎",
+        "－",
+        "〇"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "OMEGA",
+      "attendance": [
+        "◎",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "つぐみ",
+      "attendance": [
+        "◎",
+        "△",
+        "◎"
+      ],
+      "is_strategist": false,
+      "vanguard": [
+        true,
+        true,
+        true
+      ]
     }
   ]
 }
