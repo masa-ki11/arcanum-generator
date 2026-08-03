@@ -47,6 +47,12 @@ FONT_CANDIDATES = {
 FONT_SIZES = {"darwin": 13, "win32": 10}
 ROW_HEIGHTS = {"darwin": 26, "win32": 24}
 
+PREFERRED_WINDOW_W, PREFERRED_WINDOW_H = 1280, 760
+# これより狭いと、3パネルに割り振れる幅が足りず操作ボタンが枠外に出る。
+MIN_WINDOW_W, MIN_WINDOW_H = 1040, 600
+# メニューバー・Dock・タスクバーに隠れないよう空けておく余白。
+SCREEN_MARGIN_W, SCREEN_MARGIN_H = 80, 140
+
 
 class BulkAddDialog(tk.Toplevel):
     """改行区切りでメンバーをまとめて追加するダイアログ."""
@@ -96,8 +102,7 @@ class ArcanumApp(tk.Tk):
         self._autosave_enabled = False
 
         self.title(APP_TITLE)
-        self.geometry("1280x760")
-        self.minsize(1040, 640)
+        self._apply_initial_geometry()
         self._setup_style()
 
         self.slots_var = tk.IntVar(value=self.roster.slots_per_member)
@@ -169,6 +174,21 @@ class ArcanumApp(tk.Tk):
     # ------------------------------------------------------------------
     # 画面の組み立て
     # ------------------------------------------------------------------
+    def _apply_initial_geometry(self) -> None:
+        """画面に収まる大きさで開く.
+
+        決め打ちのサイズだと、14インチノートや文字を大きくした設定の環境で
+        ウィンドウが画面からはみ出し、下端の操作行が見えなくなる。
+        メニューバーやDock/タスクバーのぶんを引いた範囲に収める。
+        """
+        available_w = max(1, self.winfo_screenwidth() - SCREEN_MARGIN_W)
+        available_h = max(1, self.winfo_screenheight() - SCREEN_MARGIN_H)
+        # 画面のほうが狭ければ画面を優先する。下限を押し通すと画面外にはみ出す。
+        width = min(PREFERRED_WINDOW_W, available_w)
+        height = min(PREFERRED_WINDOW_H, available_h)
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(MIN_WINDOW_W, width), min(MIN_WINDOW_H, height))
+
     def _setup_style(self) -> None:
         family = self._pick_font_family()
         size = FONT_SIZES.get(sys.platform, 10)
@@ -265,35 +285,47 @@ class ArcanumApp(tk.Tk):
         self.arcanum_category_var = tk.StringVar(value=DEFAULT_CATEGORY)
         self.arcanum_first_half_var = tk.BooleanVar(value=False)
 
+        # grid にして、狭いときは名前欄だけが縮むようにする。pack(side="left") だと
+        # Entry が要求幅を譲らず、後ろに置いた「追加」ボタンが枠外に消える。
         editor = ttk.Frame(frame)
-        entry = ttk.Entry(editor, textvariable=self.arcanum_name_var)
-        entry.pack(side="left", fill="x", expand=True)
+        entry = ttk.Entry(editor, textvariable=self.arcanum_name_var, width=8)
+        entry.grid(row=0, column=0, sticky="ew")
         entry.bind("<Return>", lambda _e: self.add_arcanum())
         self.required_spin = ttk.Spinbox(
             editor, from_=1, to=99, width=4, textvariable=self.arcanum_required_var
         )
-        self.required_spin.pack(side="left", padx=(6, 0))
-        ttk.Button(editor, text="追加", command=self.add_arcanum).pack(
-            side="left", padx=(6, 0)
+        self.required_spin.grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(editor, text="追加", command=self.add_arcanum).grid(
+            row=0, column=2, padx=(6, 0)
         )
+        editor.columnconfigure(0, weight=1)
 
         category_row = ttk.Frame(frame)
-        ttk.Label(category_row, text="種類:").pack(side="left")
+        ttk.Label(category_row, text="種類:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(
             category_row,
             textvariable=self.arcanum_category_var,
             values=list(CATEGORY_NAMES),
             state="readonly",
-            width=16,
-        ).pack(side="left", padx=(6, 0))
-        self.category_hint = ttk.Label(category_row, text="", foreground="#666666")
-        self.category_hint.pack(side="left", padx=(8, 0))
+            width=14,
+        ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        # 説明文は次の行に折り返して置く。同じ行に並べるとパネル幅を押し広げ、
+        # 狭い画面で「追加」ボタンなどが押し出される。
+        self.category_hint = ttk.Label(
+            category_row,
+            text="",
+            foreground="#666666",
+            wraplength=240,
+            justify="left",
+        )
+        self.category_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        category_row.columnconfigure(1, weight=1)
         self.arcanum_category_var.trace_add("write", lambda *_: self._update_category_hint())
 
         first_half_row = ttk.Frame(frame)
         ttk.Checkbutton(
             first_half_row,
-            text=f"{FIRST_HALF_MARK} 前半必須(◎の人を優先して充てる)",
+            text=f"{FIRST_HALF_MARK} 前半必須(◎優先)",
             variable=self.arcanum_first_half_var,
         ).pack(side="left")
 
@@ -353,7 +385,10 @@ class ArcanumApp(tk.Tk):
         # wraplength を付けて、長いヒント文がパネル幅を押し広げないようにする。
         hint = ttk.Label(
             frame,
-            text="戦の列をダブルクリックでその戦を ◎→〇→△→×→－ と切り替え",
+            text=(
+                "戦の列をダブルクリックでその戦を ◎→〇→△→×→－ と切り替え / "
+                "「一括」で名前をまとめて貼り付け"
+            ),
             foreground="#666666",
             wraplength=210,
             justify="left",
@@ -361,20 +396,21 @@ class ArcanumApp(tk.Tk):
 
         editor = ttk.Frame(frame)
         self.member_name_var = tk.StringVar()
-        entry = ttk.Entry(editor, textvariable=self.member_name_var)
-        entry.pack(side="left", fill="x", expand=True)
+        entry = ttk.Entry(editor, textvariable=self.member_name_var, width=8)
+        entry.grid(row=0, column=0, sticky="ew")
         entry.bind("<Return>", lambda _e: self.add_member())
-        ttk.Button(editor, text="追加", command=self.add_member).pack(
-            side="left", padx=(6, 0)
+        ttk.Button(editor, text="追加", command=self.add_member).grid(
+            row=0, column=1, padx=(6, 0)
         )
+        # 「一括追加」はここに置く。ボタン行に集めると狭い画面で行が入り切らず、
+        # 端の ↑↓ が枠外へ押し出される。
+        ttk.Button(editor, text="一括", command=self.bulk_add_members).grid(
+            row=0, column=2, padx=(4, 0)
+        )
+        editor.columnconfigure(0, weight=1)
 
         buttons = ttk.Frame(frame)
-        ttk.Button(buttons, text="一括追加", command=self.bulk_add_members).pack(
-            side="left"
-        )
-        ttk.Button(buttons, text="削除", command=self.delete_members).pack(
-            side="left", padx=(6, 0)
-        )
+        ttk.Button(buttons, text="削除", command=self.delete_members).pack(side="left")
         ttk.Button(buttons, text="軍師", command=self.toggle_strategist).pack(
             side="left", padx=(6, 0)
         )
@@ -465,9 +501,10 @@ class ArcanumApp(tk.Tk):
         self.result_tree.column("arcanum", width=110, anchor="w", stretch=False)
         self.result_tree.column("required", width=48, anchor="center", stretch=False)
         self.result_tree.column("per_battle", width=84, anchor="center", stretch=False)
-        # 担当者が多いと入り切らない。minwidth を確保して横スクロールで読ませる。
+        # 担当者が多いと入り切らない。広い画面では伸びるが、狭い画面で
+        # パネル幅を要求しすぎないよう最低幅は控えめにして横スクロールに回す。
         self.result_tree.column(
-            "members", width=420, minwidth=420, anchor="w", stretch=True
+            "members", width=240, minwidth=240, anchor="w", stretch=True
         )
         self.result_tree.tag_configure("short", foreground="#c0392b")
         self.result_tree.tag_configure("nobest", foreground="#c47f00")
@@ -493,7 +530,7 @@ class ArcanumApp(tk.Tk):
         self.load_tree.column("name", width=110, anchor="w", stretch=False)
         self.load_tree.column("count", width=52, anchor="center", stretch=False)
         self.load_tree.column(
-            "arcana", width=360, minwidth=360, anchor="w", stretch=True
+            "arcana", width=220, minwidth=220, anchor="w", stretch=True
         )
         self.load_tree.tag_configure("idle", foreground="#909090")
         self._add_scrollbars(load_box, self.load_tree, horizontal=True)
