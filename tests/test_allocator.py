@@ -995,6 +995,41 @@ class AutosaveLocationTest(unittest.TestCase):
                 os.chdir(original)
 
 
+class FrozenPathTest(unittest.TestCase):
+    """配布用にビルドしたときの保存先."""
+
+    def _project_dir_for(self, executable: str) -> Path:
+        import arcanum_generator.storage as storage
+
+        original_frozen = getattr(sys, "frozen", None)
+        original_exe = sys.executable
+        sys.frozen = True  # type: ignore[attr-defined]
+        sys.executable = executable
+        try:
+            return storage.project_dir()
+        finally:
+            sys.executable = original_exe
+            if original_frozen is None:
+                del sys.frozen  # type: ignore[attr-defined]
+            else:
+                sys.frozen = original_frozen  # type: ignore[attr-defined]
+
+    def test_windows_exe_saves_next_to_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "arcanum-generator.exe"
+            exe.write_text("", encoding="utf-8")
+            self.assertEqual(self._project_dir_for(str(exe)), Path(tmp).resolve())
+
+    def test_macos_app_saves_outside_the_bundle(self):
+        # .app の中に保存するとアプリ内部に隠れてしまうので、.app と同じ階層に置く。
+        with tempfile.TemporaryDirectory() as tmp:
+            inner = Path(tmp) / "arcanum-generator.app" / "Contents" / "MacOS"
+            inner.mkdir(parents=True)
+            exe = inner / "arcanum-generator"
+            exe.write_text("", encoding="utf-8")
+            self.assertEqual(self._project_dir_for(str(exe)), Path(tmp).resolve())
+
+
 class AtomicSaveTest(unittest.TestCase):
     def test_save_leaves_no_temp_file_behind(self):
         roster = Roster(arcana(("神楽", 2)), members(yes=2))

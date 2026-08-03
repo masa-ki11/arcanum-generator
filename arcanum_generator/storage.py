@@ -37,7 +37,13 @@ def project_dir() -> Path:
     """
     if getattr(sys, "frozen", False):
         # PyInstaller などで固めた場合は実行ファイルの場所。
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        # macOS の .app は実体が Contents/MacOS/ の中にある。そこへ保存すると
+        # アプリの内部に隠れてしまうので、.app と同じ階層に置く。
+        for parent in exe_dir.parents:
+            if parent.suffix == ".app":
+                return parent.parent
+        return exe_dir
     return Path(__file__).resolve().parent.parent
 
 

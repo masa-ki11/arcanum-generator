@@ -7,3 +7,8 @@ __pycache__/
 # kassen.json
 *.json.tmp
 *.json.broken
+
+# 配布用ビルドの成果物(PyInstaller)
+dist/
+build/
+*.spec

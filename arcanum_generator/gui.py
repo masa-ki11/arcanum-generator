@@ -1170,5 +1170,41 @@ class ArcanumApp(tk.Tk):
         return sorted(int(iid) for iid in tree.selection())
 
 
+def selftest(report_path: str | None = None) -> int:
+    """画面が組み上がるかだけ確かめて終了する.
+
+    配布用にビルドした実行ファイルの動作確認に使う。--windowed でビルドすると
+    起動時のエラーが画面にも標準出力にも出ないため、終了コードで判定できる
+    入口を用意しておく。自動保存先は一時フォルダに逃がす。
+    """
+    import tempfile
+
+    autosave = Path(tempfile.mkdtemp()) / "kassen.json"
+    lines = []
+    try:
+        app = ArcanumApp(autosave_file=autosave)
+        app.update_idletasks()
+        app.update()
+        width, height = app.winfo_width(), app.winfo_height()
+        buttons = len(app.arcana_tree["columns"]) and len(app.member_tree["columns"])
+        ok = app.winfo_exists() and width > 100 and height > 100 and buttons
+        lines.append(f"window={width}x{height} columns_ok={bool(buttons)}")
+        app.destroy()
+    except Exception as exc:  # 起動時の失敗をそのまま持ち帰る
+        import traceback
+
+        lines.append(traceback.format_exc())
+        ok = False
+    lines.insert(0, "SELFTEST " + ("OK" if ok else "NG"))
+    report = "\n".join(lines)
+    if report_path:
+        Path(report_path).write_text(report, encoding="utf-8")
+    try:
+        print(report)
+    except Exception:
+        pass  # --windowed では標準出力が無い
+    return 0 if ok else 1
+
+
 def main() -> None:
     ArcanumApp().mainloop()
