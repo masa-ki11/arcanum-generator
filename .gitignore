@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 自動保存ファイル(実行時に作られる作業データ)
+kassen.json
+*.json.tmp
+*.json.broken

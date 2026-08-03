@@ -1,0 +1,11 @@
+[project]
+name = "arcanum-generator"
+version = "1.0.0"
+description = "戦国炎舞の合戦で、参戦する連合員へ奥義の担当を割り振るデスクトップツール"
+# このプロジェクトは最新の Python で動かす方針。
+# (コード自体は 3.11 でも動くが、環境は .venv の 3.14 系に固定する)
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.arcanum-generator]
+entry-point = "main.py"
