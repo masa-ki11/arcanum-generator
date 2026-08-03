@@ -36,13 +36,14 @@ FIXED = "絆"
 
 
 def arcana(*items) -> list[Arcanum]:
-    """(名前, 必要人数[, 種類[, 前半必須]]) から奥義リストを作る."""
+    """(名前, 必要人数[, 種類[, 前半必須[, 前衛向け]]]) から奥義リストを作る."""
     built = []
     for item in items:
         name, required = item[0], item[1]
         category = item[2] if len(item) > 2 else FIXED
         first_half = item[3] if len(item) > 3 else False
-        built.append(Arcanum(name, required, category, first_half))
+        for_vanguard = item[4] if len(item) > 4 else False
+        built.append(Arcanum(name, required, category, first_half, for_vanguard))
     return built
 
 
@@ -586,6 +587,245 @@ class CategoryTest(unittest.TestCase):
         self.assertTrue(any(FILL in w for w in result.warnings))
 
 
+class VanguardTest(unittest.TestCase):
+    def test_default_is_all_rear(self):
+        member = Member("A")
+        self.assertEqual(member.vanguard, [False] * BATTLE_COUNT)
+        self.assertEqual(member.vanguard_battles(), set())
+
+    def test_vanguard_is_per_battle(self):
+        member = Member("A", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, True])
+        self.assertTrue(member.is_vanguard(0))
+        self.assertFalse(member.is_vanguard(1))
+        self.assertEqual(member.vanguard_battles(), {0, 2})
+
+    def test_single_bool_spreads_to_all_battles(self):
+        self.assertEqual(Member("A", vanguard=True).vanguard, [True] * BATTLE_COUNT)
+
+    def test_short_list_is_padded(self):
+        self.assertEqual(Member("A", vanguard=[True]).vanguard, [True, False, False])
+
+    def test_roster_counts_only_attending_vanguards(self):
+        roster = Roster(
+            arcana(("技", 1, FIXED)),
+            [
+                Member("出る前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("休む前衛", [ATTEND_NO] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("軍師前衛", [ATTEND_YES] * BATTLE_COUNT, True, [True] * 3),
+                Member("後衛", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        # 出られない人と軍師は数えない。
+        self.assertEqual([m.name for m in roster.vanguards(0)], ["出る前衛"])
+
+    def test_result_carries_vanguard(self):
+        roster = Roster(
+            arcana(("技", 2, FIXED)),
+            [
+                Member("A", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, False]),
+                Member("B", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=60)
+        self.assertEqual(result.vanguard["A"], [True, False, False])
+        self.assertEqual(result.vanguard["B"], [False] * BATTLE_COUNT)
+
+    def test_vanguard_survives_save_and_load(self):
+        roster = Roster(
+            arcana(("技", 2, FIXED)),
+            [
+                Member("A", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, True]),
+                Member("B", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kassen.json"
+            save_roster(roster, path)
+            restored = load_roster(path)
+        self.assertEqual(restored.members[0].vanguard, [True, False, True])
+        self.assertEqual(restored.members[1].vanguard, [False] * BATTLE_COUNT)
+
+    def test_version4_file_without_vanguard_loads_as_rear(self):
+        legacy = {
+            "version": 4,
+            "slots_per_member": 4,
+            "arcana": [{"name": "技", "required": 2, "category": FIXED}],
+            "members": [{"name": "A", "attendance": [ATTEND_YES] * BATTLE_COUNT}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "v4.json"
+            path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            restored = load_roster(path)
+        self.assertEqual(restored.members[0].vanguard, [False] * BATTLE_COUNT)
+
+
+
+class VanguardArcanumTest(unittest.TestCase):
+    """前衛向けの奥義は、どの戦にも前衛の担当が1人以上いるようにする."""
+
+    def test_vanguard_arcanum_prefers_vanguard_members(self):
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True)),
+            [
+                Member("後衛", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+            ],
+        )
+        result = allocate(roster, seed=70)
+        self.assertEqual(result.assignments[0].members, ["前衛"])
+        self.assertEqual(result.assignments[0].uncovered_vanguard, [])
+
+    def test_expands_when_vanguard_differs_per_battle(self):
+        # 戦ごとに前衛が入れ替わるので、必要人数1でも3人必要になる。
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True)),
+            [
+                Member("前1", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, False]),
+                Member("前2", [ATTEND_YES] * BATTLE_COUNT, vanguard=[False, True, False]),
+                Member("前3", [ATTEND_YES] * BATTLE_COUNT, vanguard=[False, False, True]),
+                Member("後衛", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=71)
+        assignment = result.assignments[0]
+        self.assertEqual(sorted(assignment.members), ["前1", "前2", "前3"])
+        self.assertEqual(assignment.vanguard_battles, [True] * BATTLE_COUNT)
+
+    def test_vanguard_must_also_attend_that_battle(self):
+        # 2戦目は前衛だが参戦しないので、その戦は埋まったことにしない。
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True)),
+            [
+                Member("休む前衛", [ATTEND_YES, ATTEND_NO, ATTEND_YES], vanguard=[True] * 3),
+                Member("後衛", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=72)
+        self.assertEqual(result.assignments[0].uncovered_vanguard, [1])
+        self.assertTrue(
+            any("前衛の担当がいない戦" in w for w in result.warnings)
+        )
+
+    def test_no_warning_when_all_battles_have_a_vanguard(self):
+        roster = Roster(
+            arcana(("前衛技", 2, FIXED, False, True)),
+            [
+                Member("通し前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("後衛", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=73)
+        self.assertEqual(result.assignments[0].uncovered_vanguard, [])
+        self.assertFalse(any("前衛の担当がいない戦" in w for w in result.warnings))
+
+    def test_rearguard_is_never_assigned_even_to_fill_the_required_count(self):
+        # 全戦とも前衛の人が1人いてもカバーは済むが、2人目に後衛を入れてはいけない。
+        roster = Roster(
+            arcana(("前衛技", 2, FIXED, False, True)),
+            [
+                Member("通し前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("前衛2", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, False]),
+                Member("後衛A", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("後衛B", [ATTEND_BEST] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=80)
+        self.assertEqual(sorted(result.assignments[0].members), ["前衛2", "通し前衛"])
+
+    def test_shortage_rather_than_falling_back_to_rearguard(self):
+        # 前衛が1人しかいなければ1人担当のままにする。後衛で埋めない。
+        roster = Roster(
+            arcana(("前衛技", 2, FIXED, False, True)),
+            [
+                Member("唯一の前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("後衛A", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("後衛B", [ATTEND_BEST] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=81)
+        assignment = result.assignments[0]
+        self.assertEqual(assignment.members, ["唯一の前衛"])
+        self.assertTrue(assignment.is_short)
+        self.assertTrue(
+            any("前衛として出られる人が" in w for w in result.warnings)
+        )
+
+    def test_vanguard_who_never_attends_is_not_eligible(self):
+        # 前衛に設定されていても、その戦に参戦しないなら前衛として使えない。
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True)),
+            [
+                Member("来ない前衛", [ATTEND_NO] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("出る前衛", [ATTEND_YES, ATTEND_NO, ATTEND_NO], vanguard=[True] * 3),
+            ],
+        )
+        result = allocate(roster, seed=82)
+        self.assertEqual(result.assignments[0].members, ["出る前衛"])
+
+    def test_fill_category_also_respects_vanguard(self):
+        # 「瞬時(何度も)」に前衛向けを付けたら、余り埋めでも後衛には配らない。
+        roster = Roster(
+            arcana(("連打", 2, FILL, False, True)),
+            [
+                Member("前衛", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True] * 3),
+                Member("後衛A", [ATTEND_YES] * BATTLE_COUNT),
+                Member("後衛B", [ATTEND_NO] * BATTLE_COUNT),
+            ],
+            slots_per_member=4,
+        )
+        result = allocate(roster, seed=83)
+        self.assertEqual(result.assignments[0].members, ["前衛"])
+
+    def test_plain_arcanum_ignores_vanguard(self):
+        roster = Roster(
+            arcana(("普通技", 1, FIXED)),
+            [Member("後衛", [ATTEND_YES] * BATTLE_COUNT)],
+        )
+        result = allocate(roster, seed=74)
+        self.assertEqual(result.assignments[0].uncovered_vanguard, [])
+
+    def test_flag_survives_save_and_load(self):
+        roster = Roster(
+            arcana(("前衛技", 2, FIXED, False, True), ("普通技", 2)),
+            members(yes=3),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kassen.json"
+            save_roster(roster, path)
+            restored = load_roster(path)
+        self.assertEqual([a.for_vanguard for a in restored.arcana], [True, False])
+
+
+class OutputExcludesVanguardTest(unittest.TestCase):
+    """連合員の前衛設定は出力に載せない(奥義側の印は載せる)."""
+
+    def _result(self):
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True)),
+            [Member("A", [ATTEND_YES] * BATTLE_COUNT, vanguard=[True, False, True])],
+        )
+        return allocate(roster, seed=75)
+
+    def test_text_has_no_member_vanguard_marks(self):
+        from arcanum_generator.storage import format_result_text
+
+        body = format_result_text(self._result()).split("【メンバー別】")[1]
+        self.assertNotIn("前－前", body)
+        self.assertIn("A:", body)
+
+    def test_csv_has_no_member_vanguard_columns(self):
+        from arcanum_generator.storage import export_csv
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            export_csv(self._result(), path)
+            text = path.read_text(encoding="utf-8-sig")
+        self.assertNotIn("1戦目の前衛", text)
+        self.assertIn("メンバー,1戦目,2戦目,3戦目,担当数,担当奥義", text)
+        # 奥義側の「前衛向け」印は残す。
+        self.assertIn("種類,前半必須,前衛向け,奥義", text)
+
+
 class MemberOrderTest(unittest.TestCase):
     """メンバー別の出力は、担当数順ではなく連合員の並び順で出す."""
 
@@ -696,6 +936,41 @@ class StorageTest(unittest.TestCase):
             path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
             restored = load_roster(path)
         self.assertEqual(restored.members[0].attendance, [ATTEND_BEST] * BATTLE_COUNT)
+
+
+class FileVersionTest(unittest.TestCase):
+    def test_current_version_is_accepted(self):
+        """保存した直後のファイルが必ず読めること.
+
+        保存側と読み込み側でバージョンを二重管理していた頃、項目を増やすたびに
+        受け入れ側の更新を忘れて開けなくなった。その再発を防ぐ。
+        """
+        from arcanum_generator.models import FILE_VERSION
+        from arcanum_generator.storage import SUPPORTED_VERSIONS
+
+        self.assertIn(FILE_VERSION, SUPPORTED_VERSIONS)
+        roster = Roster(arcana(("技", 2)), members(yes=2))
+        self.assertEqual(roster.to_dict()["version"], FILE_VERSION)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kassen.json"
+            save_roster(roster, path)
+            load_roster(path)  # 例外が出ないこと
+
+    def test_all_older_versions_are_accepted(self):
+        from arcanum_generator.models import FILE_VERSION
+        from arcanum_generator.storage import SUPPORTED_VERSIONS
+
+        self.assertEqual(set(SUPPORTED_VERSIONS), set(range(1, FILE_VERSION + 1)))
+
+    def test_future_version_is_rejected(self):
+        from arcanum_generator.models import FILE_VERSION
+
+        future = {"version": FILE_VERSION + 1, "arcana": [], "members": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "future.json"
+            path.write_text(json.dumps(future), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_roster(path)
 
 
 class AutosaveLocationTest(unittest.TestCase):

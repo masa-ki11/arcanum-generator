@@ -11,6 +11,13 @@ DEFAULT_SLOTS_PER_MEMBER = 4
 """連合員1人が担当できる奥義数の既定値."""
 
 
+FILE_VERSION = 6
+"""保存形式のバージョン. 項目を増やしたらここだけ上げる.
+
+読み込み側は 1〜この値 を受け付ける(storage.SUPPORTED_VERSIONS)。
+二重管理にすると更新漏れでファイルが開けなくなるので、定義はここ1か所。
+"""
+
 BATTLE_COUNT = 3
 """1日の合戦の数. 参戦状況は戦ごとに持つが、奥義は1日通して変えない."""
 
@@ -114,6 +121,8 @@ class Arcanum:
     category: str = DEFAULT_CATEGORY
     first_half: bool = False
     """前半に無いと困る奥義. 担当には◎の人を優先して充てる."""
+    for_vanguard: bool = False
+    """前衛に持たせる奥義. どの戦にも前衛の担当が1人以上いるようにする."""
 
     @property
     def fills_leftover(self) -> bool:
@@ -135,6 +144,7 @@ class Arcanum:
             "required": self.required,
             "category": self.category,
             "first_half": self.first_half,
+            "for_vanguard": self.for_vanguard,
         }
 
     @classmethod
@@ -145,11 +155,27 @@ class Arcanum:
             # 種類・前半必須を持たない古い形式のファイルは既定値で読む。
             category=str(data.get("category", DEFAULT_CATEGORY)),
             first_half=bool(data.get("first_half", False)),
+            for_vanguard=bool(data.get("for_vanguard", False)),
         )
 
 
 def default_attendance() -> list[str]:
     return [DEFAULT_ATTENDANCE] * BATTLE_COUNT
+
+
+def default_vanguard() -> list[bool]:
+    return [False] * BATTLE_COUNT
+
+
+def normalize_vanguard(value) -> list[bool]:
+    """前衛設定を戦数ぶんのリストに揃える. 単一の真偽値は全戦に広げる."""
+    if isinstance(value, bool):
+        flags = [value] * BATTLE_COUNT
+    else:
+        flags = [bool(v) for v in value]
+    if len(flags) < BATTLE_COUNT:
+        flags += [False] * (BATTLE_COUNT - len(flags))
+    return flags[:BATTLE_COUNT]
 
 
 def normalize_attendance(value) -> list[str]:
@@ -174,9 +200,28 @@ class Member:
     attendance: list[str] = field(default_factory=default_attendance)
     is_strategist: bool = False
     """軍師. 奥義の割り当て対象から外す."""
+    vanguard: list[bool] = field(default_factory=default_vanguard)
+    """戦ごとの前衛設定. 参戦状況と同じく戦ごとに変わる."""
 
     def __post_init__(self) -> None:
         self.attendance = normalize_attendance(self.attendance)
+        self.vanguard = normalize_vanguard(self.vanguard)
+
+    def is_vanguard(self, battle: int) -> bool:
+        return self.vanguard[battle]
+
+    def vanguard_battles(self) -> set[int]:
+        return {i for i, v in enumerate(self.vanguard) if v}
+
+    def can_be_vanguard(self) -> bool:
+        """前衛として出る戦が1つでもあるか.
+
+        前衛に設定されていても、その戦に参戦しないなら前衛としては数えない。
+        """
+        return any(
+            self.is_vanguard(battle) and self.joins(battle)
+            for battle in range(BATTLE_COUNT)
+        )
 
     def level(self, battle: int) -> str:
         return self.attendance[battle]
@@ -210,6 +255,7 @@ class Member:
             "name": self.name,
             "attendance": list(self.attendance),
             "is_strategist": self.is_strategist,
+            "vanguard": list(self.vanguard),
         }
 
     @classmethod
@@ -224,6 +270,8 @@ class Member:
             name=str(data["name"]),
             attendance=attendance,
             is_strategist=bool(data.get("is_strategist", False)),
+            # 前衛を持たない古い形式は全戦とも後衛として読む。
+            vanguard=normalize_vanguard(data.get("vanguard", False)),
         )
 
 
@@ -267,6 +315,10 @@ class Roster:
         """その戦に出る見込みのあるメンバー(軍師を除く)."""
         return [m for m in self.fill_members() if m.joins(battle)]
 
+    def vanguards(self, battle: int) -> list[Member]:
+        """その戦に前衛として出るメンバー(軍師を除き、出る見込みのある人だけ)."""
+        return [m for m in self.joiners(battle) if m.is_vanguard(battle)]
+
     # -- 枠の計算 ----------------------------------------------------------
     def demand(self) -> int:
         """必ず確保しなければならない担当枠の総数.
@@ -294,7 +346,7 @@ class Roster:
     # -- 保存 --------------------------------------------------------------
     def to_dict(self) -> dict:
         return {
-            "version": 4,
+            "version": FILE_VERSION,
             "battle_count": BATTLE_COUNT,
             "slots_per_member": self.slots_per_member,
             "arcana": [a.to_dict() for a in self.arcana],

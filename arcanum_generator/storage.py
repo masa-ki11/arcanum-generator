@@ -9,11 +9,21 @@ import time
 from pathlib import Path
 
 from .allocator import AllocationResult
-from .models import BATTLE_COUNT, BATTLE_LABELS, Roster, category_order
+from .models import (
+    BATTLE_COUNT,
+    BATTLE_LABELS,
+    FILE_VERSION,
+    Roster,
+    category_order,
+)
 
-SUPPORTED_VERSIONS = {1, 2, 3, 4}
+# 古い形式はすべて既定値で読めるようにしてあるので、1〜現行版を受け付ける。
+# 個別に列挙すると項目を増やしたときに更新を忘れ、保存直後のファイルが
+# 開けなくなる(実際に2回やらかした)。
+SUPPORTED_VERSIONS = frozenset(range(1, FILE_VERSION + 1))
 
 FIRST_HALF_MARK = "★"
+VANGUARD_MARK = "前"
 
 AUTOSAVE_NAME = "kassen.json"
 """プロジェクトフォルダに置く自動保存ファイルの名前."""
@@ -81,7 +91,7 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
-            ["種類", "前半必須", "奥義", "必要人数", "担当人数"]
+            ["種類", "前半必須", "前衛向け", "奥義", "必要人数", "担当人数"]
             + [f"{label}に確実に出せる人数" for label in BATTLE_LABELS]
             + [f"{label}に出られる人数(△含む)" for label in BATTLE_LABELS]
             + ["担当者"]
@@ -91,6 +101,7 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
                 [
                     assignment.category,
                     FIRST_HALF_MARK if assignment.first_half else "",
+                    VANGUARD_MARK if assignment.for_vanguard else "",
                     assignment.arcanum,
                     assignment.required,
                     len(assignment.members),
@@ -100,6 +111,7 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
                 ]
             )
         writer.writerow([])
+        # 前衛は出力に含めない(割り振りの入力としてだけ使う)。
         writer.writerow(
             ["メンバー"] + list(BATTLE_LABELS) + ["担当数", "担当奥義"]
         )
@@ -130,7 +142,9 @@ def format_result_text(result: AllocationResult) -> str:
                 lines.append("")
             lines.append(f"【{current_category}】")
         members = "、".join(assignment.members) if assignment.members else "(未割当)"
-        mark = FIRST_HALF_MARK if assignment.first_half else ""
+        mark = (FIRST_HALF_MARK if assignment.first_half else "") + (
+            VANGUARD_MARK if assignment.for_vanguard else ""
+        )
         marks = "/".join(assignment.battle_marks())
         lines.append(
             f"{mark}{assignment.arcanum}({len(assignment.members)}人 "
@@ -143,8 +157,10 @@ def format_result_text(result: AllocationResult) -> str:
     )
     lines.append("")
     lines.append(
-        f"【メンバー別】 {FIRST_HALF_MARK}=前半必須 / 参戦は1戦目→3戦目の順"
+        f"【メンバー別】 {FIRST_HALF_MARK}=前半必須 {VANGUARD_MARK}=前衛向け / "
+        "参戦は1戦目→3戦目の順"
     )
+    # 前衛は出力に含めない(割り振りの入力としてだけ使う)。
     # load は連合員の並び順で作ってあるので、そのまま出す。
     for name, arcana in result.load.items():
         levels = "".join(result.attendance.get(name, []))
