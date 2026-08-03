@@ -1,0 +1,351 @@
+{
+  "version": 4,
+  "battle_count": 3,
+  "slots_per_member": 4,
+  "arcana": [
+    {
+      "name": "孔明",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "竜章",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "兵法",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "中国",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "沖",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "四面",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "暗雲",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "堅忍",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "啄木鳥",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "暴欲",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "土竜",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "月",
+      "required": 2,
+      "category": "一定",
+      "first_half": false
+    },
+    {
+      "name": "大華",
+      "required": 2,
+      "category": "一定",
+      "first_half": true
+    },
+    {
+      "name": "悪戯",
+      "required": 2,
+      "category": "瞬時(一度のみ)",
+      "first_half": true
+    },
+    {
+      "name": "宴楽",
+      "required": 2,
+      "category": "瞬時(一度のみ)",
+      "first_half": false
+    },
+    {
+      "name": "もちまる",
+      "required": 2,
+      "category": "瞬時(一度のみ)",
+      "first_half": false
+    },
+    {
+      "name": "心臓",
+      "required": 2,
+      "category": "瞬時(一度のみ)",
+      "first_half": false
+    },
+    {
+      "name": "猛虎",
+      "required": 2,
+      "category": "瞬時(何度も)",
+      "first_half": false
+    },
+    {
+      "name": "栄枯",
+      "required": 2,
+      "category": "瞬時(何度も)",
+      "first_half": false
+    },
+    {
+      "name": "天下",
+      "required": 2,
+      "category": "瞬時(何度も)",
+      "first_half": false
+    },
+    {
+      "name": "花鳥",
+      "required": 2,
+      "category": "瞬時(何度も)",
+      "first_half": false
+    },
+    {
+      "name": "火竜",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    },
+    {
+      "name": "水竜",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    },
+    {
+      "name": "牛",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    },
+    {
+      "name": "モモ",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    },
+    {
+      "name": "羊",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    },
+    {
+      "name": "猿",
+      "required": 2,
+      "category": "絆",
+      "first_half": false
+    }
+  ],
+  "members": [
+    {
+      "name": "jt",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "tama",
+      "attendance": [
+        "◎",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ししゃも",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": true
+    },
+    {
+      "name": "ごうき",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "kino",
+      "attendance": [
+        "◎",
+        "△",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "さぁし",
+      "attendance": [
+        "〇",
+        "◎",
+        "－"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "華",
+      "attendance": [
+        "×",
+        "△",
+        "△"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ピコ",
+      "attendance": [
+        "◎",
+        "－",
+        "×"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "うらん",
+      "attendance": [
+        "◎",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ゼロ",
+      "attendance": [
+        "〇",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "tetsu",
+      "attendance": [
+        "×",
+        "◎",
+        "×"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ゆずぽこ",
+      "attendance": [
+        "〇",
+        "〇",
+        "〇"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "よっさん",
+      "attendance": [
+        "△",
+        "－",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ふろん太",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "ゆうくん",
+      "attendance": [
+        "－",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "九龍",
+      "attendance": [
+        "◎",
+        "－",
+        "－"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "B",
+      "attendance": [
+        "◎",
+        "－",
+        "〇"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "OMEGA",
+      "attendance": [
+        "◎",
+        "◎",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "つぐみ",
+      "attendance": [
+        "◎",
+        "△",
+        "◎"
+      ],
+      "is_strategist": false
+    },
+    {
+      "name": "BLUE",
+      "attendance": [
+        "－",
+        "△",
+        "◎"
+      ],
+      "is_strategist": false
+    }
+  ]
+}
