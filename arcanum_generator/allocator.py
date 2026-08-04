@@ -102,6 +102,32 @@ class Assignment:
 
 
 @dataclass
+class CarryoverReport:
+    """前回の割り当てをどこまで引き継げたかの記録.
+
+    引き継ぎは黙って選別すると「なぜ担当が変わったのか」が追えなくなるので、
+    維持・除外・新規をすべて残して結果に載せる。
+    """
+
+    kept: list[str] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
+    """引き継げなかった担当. 「奥義: 名前(理由)」の形で持つ."""
+    added: list[str] = field(default_factory=list)
+    """引き継ぎのあとで新しく足された担当."""
+
+    @property
+    def source_total(self) -> int:
+        """引き継ぎ元にあった担当の件数."""
+        return len(self.kept) + len(self.dropped)
+
+    def summary(self) -> str:
+        return (
+            f"前回の担当{self.source_total}件のうち{len(self.kept)}件をそのまま維持、"
+            f"{len(self.dropped)}件を外し、{len(self.added)}件を新しく足しました。"
+        )
+
+
+@dataclass
 class AllocationResult:
     """割り振り結果一式."""
 
@@ -116,7 +142,13 @@ class AllocationResult:
     """メンバー名 -> 戦ごとの参戦状況."""
     vanguard: dict[str, list[bool]] = field(default_factory=dict)
     """メンバー名 -> 戦ごとの前衛設定."""
+    carryover: CarryoverReport | None = None
+    """引き継ぎ割り振りのときだけ入る. ゼロから割り振ったときは None."""
     warnings: list[str] = field(default_factory=list)
+
+    def to_carryover(self) -> dict[str, list[str]]:
+        """次の日の起点として使える形(奥義名 -> 担当者名)に変換する."""
+        return {a.arcanum: list(a.members) for a in self.assignments}
 
     @property
     def spare_slots(self) -> int:
@@ -191,7 +223,12 @@ def validate(roster: Roster) -> list[str]:
 class _Allocator:
     """割り振りの作業用. load と picked を持ち回る."""
 
-    def __init__(self, roster: Roster, rng: random.Random) -> None:
+    def __init__(
+        self,
+        roster: Roster,
+        rng: random.Random,
+        carryover: dict[str, list[str]] | None = None,
+    ) -> None:
         self.roster = roster
         self.rng = rng
         fill_members = roster.fill_members()
@@ -203,6 +240,82 @@ class _Allocator:
         self.fallback = [
             m.name for m in roster.assignable_members() if m.name not in primary_set
         ]
+        self.source = carryover or {}
+        self.report = CarryoverReport() if carryover is not None else None
+
+    # -- 引き継ぎ ----------------------------------------------------------
+    def _reject_reason(self, arcanum: Arcanum, name: str) -> str:
+        """その担当を引き継げない理由. 引き継げるなら空文字.
+
+        「今回は参戦しない」が剪定の本体。◎だった人が×になっても担当が残ると、
+        枠を食い潰したうえに実際は誰も出ない戦ができてしまう。
+        """
+        who = self.member.get(name)
+        if who is None:
+            return "メンバーがいない(削除か軍師)"
+        if name in self.picked[arcanum.name]:
+            return "同じ奥義に重複"
+        if len(self.load[name]) >= self.roster.slots_per_member:
+            return "奥義枠がいっぱい"
+        if not self.is_eligible(arcanum, name):
+            return "前衛でなくなった"
+        # 余り埋めの種類は×や－の人にも配る段階なので、参戦では切らない。
+        if not arcanum.fills_leftover and not who.is_assignable():
+            return "今回は参戦しない"
+        return ""
+
+    def _seed_one(self, arcanum: Arcanum, name: str) -> None:
+        label = f"{arcanum.name}: {name}"
+        reason = self._reject_reason(arcanum, name)
+        if reason:
+            self.report.dropped.append(f"{label}({reason})")
+            return
+        self.load[name].append(arcanum.name)
+        self.picked[arcanum.name].append(name)
+        self.report.kept.append(label)
+
+    def _seed_order(self, fill: bool) -> list[Arcanum]:
+        """引き継ぐ順.
+
+        枠が足りずに全部は引き継げないとき、あとから埋め直すのが難しい奥義
+        (前半必須・前衛向け)を先に確保しておく。
+        """
+        return sorted(
+            (a for a in self.roster.arcana if a.fills_leftover == fill),
+            key=lambda a: (not a.first_half, not a.for_vanguard, -a.required, a.name),
+        )
+
+    def seed_carryover(self, fill: bool) -> None:
+        """前回ぶんを取り込む. fill=False は必須の奥義、True は余り埋めの種類.
+
+        必須ぶんを先に入れて通常の段階を回し、余り埋めぶんは最後に入れる。
+        余り埋めが先に枠を押さえてしまうと、本来そこに入るべき必須の奥義が
+        入れなくなるため。
+        """
+        if self.report is None:
+            return
+        if not fill:
+            # 今の奥義に無い名前は、以降どの段階でも触れられないのでここで報告する。
+            known = {a.name for a in self.roster.arcana}
+            for arcanum_name, names in self.source.items():
+                if arcanum_name not in known:
+                    for name in names:
+                        self.report.dropped.append(
+                            f"{arcanum_name}: {name}(奥義が無くなった)"
+                        )
+        for arcanum in self._seed_order(fill):
+            for name in self.source.get(arcanum.name, []):
+                self._seed_one(arcanum, name)
+
+    def record_added(self) -> None:
+        """引き継ぎ後に足された担当を洗い出す."""
+        if self.report is None:
+            return
+        for arcanum in self.roster.arcana:
+            before = set(self.source.get(arcanum.name, []))
+            for name in self.picked[arcanum.name]:
+                if name not in before:
+                    self.report.added.append(f"{arcanum.name}: {name}")
 
     def uncovered_first_half(self, arcanum: Arcanum) -> set[int]:
         """前半必須の奥義で、まだ◎の担当がいない戦."""
@@ -479,15 +592,27 @@ class _Allocator:
                 return
 
 
-def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
+def allocate(
+    roster: Roster,
+    seed: int | None = None,
+    carryover: dict[str, list[str]] | None = None,
+) -> AllocationResult:
     """メンバーへ奥義を割り振る.
 
     奥義は1日通して変えない前提なので、割り振りは1回だけ行い、その結果を
     3戦すべてで使う。参戦状況だけが戦ごとに変わる。
 
+    carryover(奥義名 -> 担当者名)を渡すと、前回の割り当てを起点にして
+    足りないところだけ埋め直す。複数日にまたがる割り振りで、変える必要の
+    ない人の担当をそのまま残すための入口。段階0と5.5が増えるだけで、
+    段階1〜6の中身は変わらない — どの段階も「足りるまで足す」ループなので、
+    埋まっている前提でそのまま動く。
+
     6段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
     段階1〜5では一切枠を取らず、段階6の余り埋めでだけ配る。
 
+    0. (引き継ぎ時のみ)前回ぶんのうち、今回も有効な担当を取り込む。
+       参戦しなくなった人などはここで外す(剪定)。
     1. 「瞬時(何度も)」以外の全奥義に1人ずつ確保する(カバレッジ優先)。
        前半必須・前衛向けの奥義を先に処理する。
        担当は◎〇から選び、足りなければ△も使う。
@@ -496,6 +621,7 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
     4. どの奥義も、各戦に出られる担当が1人以上いるまで足す。
     5. 余裕のある奥義から必要人数(既定2人)まで増やす。ここで人手が尽きた奥義は
        1人担当のままになる — 足りない分だけ2人体制を撤回する。
+    5.5 (引き継ぎ時のみ)前回ぶんの「瞬時(何度も)」を、枠が残っていれば戻す。
     6. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
 
     段階2〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
@@ -507,7 +633,9 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
     if errors:
         raise AllocationError(errors)
 
-    work = _Allocator(roster, random.Random(seed))
+    work = _Allocator(roster, random.Random(seed), carryover)
+
+    work.seed_carryover(fill=False)  # 段階0
 
     # 必ず確保する奥義だけを、制約のきついものから順に処理する。
     ordered = sorted(
@@ -516,7 +644,10 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
     )
 
     for arcanum in ordered:  # 段階1
-        work.assign_one(arcanum)
+        # 引き継ぎで既に担当がいる奥義は飛ばす。ここで無条件に足すと、
+        # 前回と同じ入力でも毎回1人ずつ増えてしまう。
+        if not work.picked[arcanum.name]:
+            work.assign_one(arcanum)
 
     for arcanum in ordered:  # 段階2
         if arcanum.first_half:
@@ -534,7 +665,9 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
             if not work.assign_one(arcanum):
                 break
 
+    work.seed_carryover(fill=True)  # 段階5.5
     work.fill_leftover()  # 段階6
+    work.record_added()
 
     # 画面に並んでいる順で結果を返す。
     assignments = [
@@ -549,6 +682,7 @@ def allocate(roster: Roster, seed: int | None = None) -> AllocationResult:
         fill_capacity=roster.fill_capacity(),
         attendance={name: list(m.attendance) for name, m in work.member.items()},
         vanguard={name: list(m.vanguard) for name, m in work.member.items()},
+        carryover=work.report,
     )
     result.warnings = _build_warnings(roster, result)
     return result
@@ -676,5 +810,20 @@ def _build_warnings(roster: Roster, result: AllocationResult) -> list[str]:
             f"{spare}枠が空いています。"
             "「瞬時(何度も)」の奥義を足すと、余った枠をそこで埋められます。"
         )
+
+    if result.carryover is not None:
+        warnings.append("【引き継ぎ】" + result.carryover.summary())
+        if result.carryover.dropped:
+            warnings.append(
+                "引き継げなかった担当: " + "、".join(result.carryover.dropped)
+            )
+        # 引き継ぎは前回ぶんを減らさないので、必要人数より多い担当も残る。
+        # 枠が窮屈なときは、それが他の奥義の不足として出てくることがある。
+        if reduced or uncovered:
+            warnings.append(
+                "引き継ぎでは前回より担当を減らさないため、枠が足りないと"
+                "他の奥義にしわ寄せが出ます。不足が気になる場合は"
+                "「割り振る」でゼロから組み直してください。"
+            )
 
     return warnings

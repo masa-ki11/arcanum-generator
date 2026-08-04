@@ -248,6 +248,11 @@ class ArcanumApp(tk.Tk):
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=12)
 
         ttk.Button(bar, text="割り振る", command=self.run_allocation).pack(side="left")
+        # 2日目以降用。前回の担当を残したまま、崩れたところだけ埋め直す。
+        self.carry_button = ttk.Button(
+            bar, text="前回から引き継いで割り振る", command=self.run_carry_allocation
+        )
+        self.carry_button.pack(side="left", padx=(6, 0))
         ttk.Button(bar, text="結果をコピー", command=self.copy_result).pack(
             side="left", padx=(6, 0)
         )
@@ -858,10 +863,15 @@ class ArcanumApp(tk.Tk):
         self._changed()
         self._update_status()
 
-    def run_allocation(self) -> None:
+    def run_allocation(self, carry: bool = False) -> None:
+        """割り振る. carry=True なら前回の担当を起点にして差分だけ埋め直す."""
         self._on_slots_changed()
+        # 起点は先に控える。成功したら結果で上書きしてしまうため。
+        source = None
+        if carry:
+            source = {k: list(v) for k, v in self.roster.carryover.items()}
         try:
-            self.result = allocate(self.roster)
+            self.result = allocate(self.roster, carryover=source)
         except AllocationError as exc:
             self.result = None
             self._refresh_result()
@@ -870,12 +880,28 @@ class ArcanumApp(tk.Tk):
             )
             self._update_status()
             return
+        # 次の日の起点として残す。参戦状況を編集すると画面の結果は捨てられるが、
+        # こちらは入力の一部として保存され、翌日の引き継ぎに使える。
+        self.roster.carryover = self.result.to_carryover()
+        self._autosave()
         self._refresh_result()
         self._update_status()
         if self.result.warnings:
             messagebox.showinfo(
                 APP_TITLE, "\n".join(self.result.warnings), parent=self
             )
+
+    def run_carry_allocation(self) -> None:
+        """前回の割り振りを引き継いで、変える必要のある担当だけ組み直す."""
+        if not self.roster.has_carryover():
+            messagebox.showinfo(
+                APP_TITLE,
+                "引き継げる前回の割り振りがありません。\n"
+                "先に「割り振る」で1日目を組んでください。",
+                parent=self,
+            )
+            return
+        self.run_allocation(carry=True)
 
     def copy_result(self) -> None:
         if not self.result:
@@ -1113,6 +1139,10 @@ class ArcanumApp(tk.Tk):
             vanguards = len(self.roster.vanguards(battle))
             battle_parts.append(f"{BATTLE_LABELS[battle]} {inner} 前衛{vanguards}")
         self.battle_status_var.set("参戦: " + " ／ ".join(battle_parts))
+
+        carry = self.roster.has_carryover()
+        self.carry_button.state(["!disabled"] if carry else ["disabled"])
+
         errors = validate(self.roster)
         if errors:
             self.status_var.set(base + "  ⚠ " + errors[0])
@@ -1124,7 +1154,16 @@ class ArcanumApp(tk.Tk):
             if short:
                 detail += f" / 必要人数に届かず {short}件"
             detail += ")"
+            if self.result.carryover:
+                detail += f" ・ 引き継ぎ {len(self.result.carryover.kept)}件維持"
             self.status_var.set(base + detail)
+        elif carry:
+            # 結果を捨てたあとでも、翌日ぶんの起点が残っていることを見せる。
+            self.status_var.set(
+                base
+                + f"  → 前回の割り振り{self.roster.carryover_size()}件を保持中"
+                "(「前回から引き継いで割り振る」で差分だけ組み直せます)"
+            )
         else:
             self.status_var.set(base + "  → 「割り振る」を押してください")
 

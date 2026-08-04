@@ -11,7 +11,7 @@ DEFAULT_SLOTS_PER_MEMBER = 4
 """連合員1人が担当できる奥義数の既定値."""
 
 
-FILE_VERSION = 6
+FILE_VERSION = 7
 """保存形式のバージョン. 項目を増やしたらここだけ上げる.
 
 読み込み側は 1〜この値 を受け付ける(storage.SUPPORTED_VERSIONS)。
@@ -275,6 +275,21 @@ class Member:
         )
 
 
+def normalize_carryover(value) -> dict[str, list[str]]:
+    """引き継ぎ元の形を 奥義名 -> 担当者名リスト に揃える.
+
+    ここでは形式だけ整える。今の奥義・メンバーに存在するかどうかの選別は
+    割り振り時に行い、外した理由を結果に載せる。
+    """
+    if not isinstance(value, dict):
+        return {}
+    carryover: dict[str, list[str]] = {}
+    for arcanum_name, names in value.items():
+        if isinstance(names, (list, tuple)):
+            carryover[str(arcanum_name)] = [str(n) for n in names]
+    return carryover
+
+
 @dataclass
 class Roster:
     """合戦1回分の入力一式."""
@@ -282,6 +297,13 @@ class Roster:
     arcana: list[Arcanum] = field(default_factory=list)
     members: list[Member] = field(default_factory=list)
     slots_per_member: int = DEFAULT_SLOTS_PER_MEMBER
+    carryover: dict[str, list[str]] = field(default_factory=dict)
+    """前回の割り振り結果(奥義名 -> 担当者名). 複数日にまたがる割り振りの起点.
+
+    参戦状況を編集すると画面の結果は捨てられるが、こちらは入力の一部として
+    残す。翌日ぶんを「引き継いで割り振る」ときに、変える必要のない担当を
+    そのまま使うため。
+    """
 
     # -- メンバーの分類 ----------------------------------------------------
     def fill_members(self) -> list[Member]:
@@ -343,6 +365,15 @@ class Roster:
         """余り枠を吸収する種類の奥義."""
         return [a for a in self.arcana if a.fills_leftover]
 
+    # -- 引き継ぎ ----------------------------------------------------------
+    def has_carryover(self) -> bool:
+        """引き継げる前回ぶんがあるか."""
+        return any(self.carryover.values())
+
+    def carryover_size(self) -> int:
+        """引き継ぎ元に入っている担当の件数."""
+        return sum(len(names) for names in self.carryover.values())
+
     # -- 保存 --------------------------------------------------------------
     def to_dict(self) -> dict:
         return {
@@ -351,6 +382,7 @@ class Roster:
             "slots_per_member": self.slots_per_member,
             "arcana": [a.to_dict() for a in self.arcana],
             "members": [m.to_dict() for m in self.members],
+            "carryover": {k: list(v) for k, v in self.carryover.items()},
         }
 
     @classmethod
@@ -361,4 +393,6 @@ class Roster:
             slots_per_member=int(
                 data.get("slots_per_member", DEFAULT_SLOTS_PER_MEMBER)
             ),
+            # 引き継ぎを持たない古い形式は「前回ぶんなし」として読む。
+            carryover=normalize_carryover(data.get("carryover")),
         )

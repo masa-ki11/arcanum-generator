@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arcanum_generator.allocator import AllocationError, allocate, validate
+from arcanum_generator.models import FILE_VERSION
 from arcanum_generator.models import (
     ATTEND_BEST,
     ATTEND_MAYBE,
@@ -1047,6 +1048,239 @@ class AtomicSaveTest(unittest.TestCase):
             restored = load_roster(path)
         self.assertEqual([a.name for a in restored.arcana], ["新"])
         self.assertEqual(restored.arcana[0].required, 3)
+
+
+class CarryoverTest(unittest.TestCase):
+    """複数日にまたがる割り振り: 前回の担当を引き継いで差分だけ組み直す."""
+
+    def _picked(self, result, name: str) -> list[str]:
+        for assignment in result.assignments:
+            if assignment.arcanum == name:
+                return assignment.members
+        raise AssertionError(f"{name} が結果にありません")
+
+    def test_none_means_from_scratch(self):
+        """carryover を渡さないときは従来どおり. 記録も付かない."""
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        self.assertIsNone(allocate(roster).carryover)
+
+    def test_unchanged_roster_keeps_every_assignment(self):
+        """入力が変わらなければ、担当は1件も動かない.
+
+        ゼロからだとタイブレークがランダムなので毎回顔ぶれが変わる。引き継ぎは
+        そこを固定するのが目的なので、ここが崩れたら機能として意味がない。
+        """
+        roster = Roster(arcana(("神楽", 2), ("鼓舞", 2), ("陣", 2)), members(best=8))
+        first = allocate(roster)
+        for _ in range(5):
+            again = allocate(roster, carryover=first.to_carryover())
+            self.assertEqual(again.to_carryover(), first.to_carryover())
+            self.assertEqual(again.carryover.dropped, [])
+            self.assertEqual(again.carryover.added, [])
+
+    def test_absent_member_is_pruned_and_replaced(self):
+        """参戦しなくなった人は外れ、代わりが入る(剪定)."""
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        first = allocate(roster)
+        leaving = self._picked(first, "神楽")[0]
+        staying = self._picked(first, "神楽")[1]
+
+        for member in roster.members:
+            if member.name == leaving:
+                member.attendance = [ATTEND_NO] * BATTLE_COUNT
+
+        second = allocate(roster, carryover=first.to_carryover())
+        picked = self._picked(second, "神楽")
+        self.assertNotIn(leaving, picked)
+        self.assertIn(staying, picked)  # 変える必要のない人はそのまま
+        self.assertEqual(len(picked), 2)  # 抜けた分は埋め直される
+        self.assertTrue(any("今回は参戦しない" in d for d in second.carryover.dropped))
+
+    def test_downgrade_to_maybe_keeps_the_member_and_adds_backup(self):
+        """◎→△に落ちた人は残したまま、確実に出せる人を足す."""
+        roster = Roster(arcana(("神楽", 2)), members(best=6))
+        first = allocate(roster)
+        kept = self._picked(first, "神楽")
+        for member in roster.members:
+            if member.name in kept:
+                member.attendance = [ATTEND_MAYBE] * BATTLE_COUNT
+
+        second = allocate(roster, carryover=first.to_carryover())
+        picked = self._picked(second, "神楽")
+        for name in kept:
+            self.assertIn(name, picked)
+        self.assertGreater(len(picked), len(kept))
+        # 足された人は◎〇なので、△頼みの戦は残らない。
+        神楽 = next(a for a in second.assignments if a.arcanum == "神楽")
+        self.assertEqual(神楽.unsure_battles, [])
+
+    def test_removed_arcanum_and_member_are_reported(self):
+        """奥義やメンバーが消えた引き継ぎは、理由付きで外れる."""
+        roster = Roster(arcana(("神楽", 2), ("鼓舞", 2)), members(best=4))
+        first = allocate(roster)
+        stale = first.to_carryover()
+        stale["存在しない奥義"] = ["best0"]
+        stale["神楽"] = list(stale["神楽"]) + ["いない人"]
+
+        second = allocate(roster, carryover=stale)
+        dropped = "\n".join(second.carryover.dropped)
+        self.assertIn("奥義が無くなった", dropped)
+        self.assertIn("メンバーがいない", dropped)
+        self.assertNotIn("いない人", self._picked(second, "神楽"))
+
+    def test_member_turned_strategist_is_dropped(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        first = allocate(roster)
+        gone = self._picked(first, "神楽")[0]
+        for member in roster.members:
+            if member.name == gone:
+                member.is_strategist = True
+
+        second = allocate(roster, carryover=first.to_carryover())
+        self.assertNotIn(gone, self._picked(second, "神楽"))
+
+    def test_rearguard_is_dropped_when_arcanum_becomes_vanguard_only(self):
+        roster = Roster(
+            arcana(("突撃", 2)),
+            [
+                Member("前衛A", [ATTEND_BEST] * BATTLE_COUNT, vanguard=True),
+                Member("前衛B", [ATTEND_BEST] * BATTLE_COUNT, vanguard=True),
+                Member("後衛A", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("後衛B", [ATTEND_BEST] * BATTLE_COUNT),
+            ],
+        )
+        stale = {"突撃": ["後衛A", "前衛A"]}
+        roster.arcana[0].for_vanguard = True
+
+        result = allocate(roster, carryover=stale)
+        picked = self._picked(result, "突撃")
+        self.assertNotIn("後衛A", picked)
+        self.assertIn("前衛A", picked)
+        self.assertTrue(any("前衛でなくなった" in d for d in result.carryover.dropped))
+
+    def test_slot_cap_is_respected(self):
+        """1人あたりの枠を減らしたら、引き継ぎもその上限を超えない."""
+        roster = Roster(
+            arcana(("A", 1), ("B", 1), ("C", 1)), members(best=3), slots_per_member=1
+        )
+        stale = {"A": ["◎0"], "B": ["◎0"], "C": ["◎0"]}
+        result = allocate(roster, carryover=stale)
+        self.assertEqual(len(result.load["◎0"]), 1)
+        self.assertTrue(any("枠がいっぱい" in d for d in result.carryover.dropped))
+
+    def test_duplicate_in_carryover_is_dropped(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        result = allocate(roster, carryover={"神楽": ["◎0", "◎0"]})
+        self.assertEqual(self._picked(result, "神楽").count("◎0"), 1)
+        self.assertTrue(any("重複" in d for d in result.carryover.dropped))
+
+    def test_required_arcana_win_slots_over_leftover_fill(self):
+        """必須の奥義は、前回の余り埋めより先に枠を取る.
+
+        余り埋めを先に戻すと、本来そこに入るべき必須の奥義が枠切れで入れない。
+        """
+        roster = Roster(
+            arcana(("必須", 2, FIXED), ("連打", 1, FILL)),
+            members(best=2),
+            slots_per_member=1,
+        )
+        stale = {"連打": ["◎0", "◎1"], "必須": []}
+        result = allocate(roster, carryover=stale)
+        self.assertEqual(len(self._picked(result, "必須")), 2)
+        self.assertEqual(self._picked(result, "連打"), [])
+
+    def test_leftover_fill_is_carried_over_when_slots_remain(self):
+        """枠が余っていれば、余り埋めの担当も前回のまま残る."""
+        roster = Roster(arcana(("必須", 2, FIXED), ("連打", 1, FILL)), members(best=4))
+        first = allocate(roster)
+        second = allocate(roster, carryover=first.to_carryover())
+        self.assertEqual(
+            sorted(self._picked(second, "連打")), sorted(self._picked(first, "連打"))
+        )
+
+    def test_absent_member_still_gets_leftover_fill(self):
+        """×の人でも余り埋めの担当は引き継ぐ(その段階は参戦を見ないため)."""
+        roster = Roster(arcana(("必須", 2, FIXED), ("連打", 1, FILL)), members(best=3, no=1))
+        result = allocate(roster, carryover={"連打": ["×0"], "必須": []})
+        self.assertIn("×0", self._picked(result, "連打"))
+
+    def test_report_counts_add_up(self):
+        roster = Roster(arcana(("神楽", 2), ("鼓舞", 2)), members(best=6))
+        first = allocate(roster)
+        second = allocate(roster, carryover=first.to_carryover())
+        report = second.carryover
+        self.assertEqual(report.source_total, len(report.kept) + len(report.dropped))
+        self.assertEqual(
+            len(report.kept) + len(report.added),
+            sum(len(a.members) for a in second.assignments),
+        )
+        self.assertIn("維持", report.summary())
+
+    def test_warning_mentions_carryover(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        first = allocate(roster)
+        second = allocate(roster, carryover=first.to_carryover())
+        self.assertTrue(any("【引き継ぎ】" in w for w in second.warnings))
+
+
+class CarryoverStorageTest(unittest.TestCase):
+    """引き継ぎ元の保存・読み込み."""
+
+    def test_round_trip(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        roster.carryover = allocate(roster).to_carryover()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kassen.json"
+            save_roster(roster, path)
+            restored = load_roster(path)
+        self.assertEqual(restored.carryover, roster.carryover)
+        self.assertTrue(restored.has_carryover())
+
+    def test_old_file_without_carryover_loads_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 6,
+                        "arcana": [{"name": "神楽", "required": 2, "category": FIXED}],
+                        "members": [{"name": "A", "attendance": [ATTEND_BEST] * 3}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            restored = load_roster(path)
+        self.assertEqual(restored.carryover, {})
+        self.assertFalse(restored.has_carryover())
+
+    def test_broken_carryover_is_ignored(self):
+        """形が違う引き継ぎで落ちない(手で編集されたファイル対策)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "odd.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": FILE_VERSION,
+                        "arcana": [{"name": "神楽", "required": 2, "category": FIXED}],
+                        "members": [{"name": "A", "attendance": [ATTEND_BEST] * 3}],
+                        "carryover": {"神楽": "文字列", "鼓舞": ["A"], "変": 3},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            restored = load_roster(path)
+        self.assertEqual(restored.carryover, {"鼓舞": ["A"]})
+
+    def test_empty_carryover_is_not_offered(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=2))
+        self.assertFalse(roster.has_carryover())
+        roster.carryover = {"神楽": []}
+        self.assertFalse(roster.has_carryover())  # 中身が空なら引き継ぐものがない
+        roster.carryover = {"神楽": ["A"]}
+        self.assertTrue(roster.has_carryover())
+        self.assertEqual(roster.carryover_size(), 1)
 
 
 if __name__ == "__main__":
