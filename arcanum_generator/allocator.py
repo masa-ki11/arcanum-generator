@@ -602,6 +602,80 @@ class _Allocator:
             if not self.assign_one(arcanum, need_best_gain=True):
                 return
 
+    def _coverage(self, arcanum: Arcanum, names: list[str]) -> tuple:
+        """その顔ぶれで塞げている穴の一覧.
+
+        担当を1人外す前後でこれが変わらなければ、その人は居ても居なくても
+        同じということなので落としてよい。
+        """
+        best: set[int] = set()
+        sure: set[int] = set()
+        joins: set[int] = set()
+        vanguard: set[int] = set()
+        for name in names:
+            who = self.member[name]
+            best |= who.best_battles()
+            for battle in range(BATTLE_COUNT):
+                if who.is_sure(battle):
+                    sure.add(battle)
+                if who.joins(battle):
+                    joins.add(battle)
+                    if who.is_vanguard(battle):
+                        vanguard.add(battle)
+        return (
+            frozenset(best) if arcanum.first_half else frozenset(),
+            frozenset(vanguard) if arcanum.for_vanguard else frozenset(),
+            frozenset(sure),
+            frozenset(joins),
+        )
+
+    def _droppable(self, arcanum: Arcanum) -> str | None:
+        """外しても塞げている穴が減らない担当のうち、いちばん外してよい人.
+
+        まずこの回に足した人から外す。前回からいる人を先に落とすと、
+        引き継ぎで担当を据え置いた意味がなくなる。
+        そのうえで担当数の多い人から外す。枠が空けば他の奥義や余り埋めに回せる。
+        """
+        picked = self.picked[arcanum.name]
+        keep = self._coverage(arcanum, picked)
+        candidates = [
+            name
+            for name in picked
+            if self._coverage(arcanum, [n for n in picked if n != name]) == keep
+        ]
+        if not candidates:
+            return None
+        carried = set(self.source.get(arcanum.name, ()))
+        return max(
+            candidates,
+            key=lambda n: (
+                n not in carried,
+                len(self.load[n]),
+                self.member[n].priority_score(),
+            ),
+        )
+
+    def trim_excess(self, arcanum: Arcanum) -> None:
+        """必要人数を超えた担当のうち、居なくても穴が空かない人を外す.
+
+        段階2〜4は穴を塞ぐために必要人数を超えて足す。翌日その穴が別の担当で
+        塞がるようになっても、足した人は残り続ける。引き継ぎを重ねると
+        この「役目の終わった担当」が溜まり、必要2人のはずの奥義が3人4人に
+        膨らんでいく。ここで落とす。
+        """
+        while len(self.picked[arcanum.name]) > arcanum.required:
+            name = self._droppable(arcanum)
+            if name is None:
+                return
+            self.picked[arcanum.name].remove(name)
+            self.load[name].remove(arcanum.name)
+            # 前回から引き継いだ人を落としたときだけ、外した扱いに直す。
+            # この回に足して落とした人は、そもそも引き継ぎ元にいない。
+            label = f"{arcanum.name}: {name}"
+            if self.report is not None and label in self.report.kept:
+                self.report.kept.remove(label)
+                self.report.dropped.append(f"{label}(居なくても穴が空かない)")
+
     def fill_leftover(self) -> None:
         """余り枠を「瞬時(何度も)」系で埋める.
 
@@ -664,8 +738,8 @@ def allocate(
     段階1〜6の中身は変わらない — どの段階も「足りるまで足す」ループなので、
     埋まっている前提でそのまま動く。
 
-    6段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
-    段階1〜5では一切枠を取らず、段階6の余り埋めでだけ配る。
+    7段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
+    段階1〜5では一切枠を取らず、段階7の余り埋めでだけ配る。
 
     0. (引き継ぎ時のみ)前回ぶんのうち、今回も有効な担当を取り込む。
        参戦しなくなった人、△だけに落ちて代わりがいる人はここで外す(剪定)。
@@ -677,11 +751,14 @@ def allocate(
     4. どの奥義も、各戦に出られる担当が1人以上いるまで足す。
     5. 余裕のある奥義から必要人数(既定2人)まで増やす。ここで人手が尽きた奥義は
        1人担当のままになる — 足りない分だけ2人体制を撤回する。
-    5.5 (引き継ぎ時のみ)前回ぶんの「瞬時(何度も)」を、枠が残っていれば戻す。
-    6. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
+    5.5 必要人数を超えた担当のうち、居なくても塞げている穴が減らない人を外す。
+    6. (引き継ぎ時のみ)前回ぶんの「瞬時(何度も)」を、枠が残っていれば戻す。
+    7. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
 
     段階2〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
     その戦は穴になるので、人数を揃えるより穴を塞ぐほうを先に済ませる。
+    ただし塞ぐ役目を別の担当が引き受けたら、超えた分は段階5.5で落とす。
+    落とさないと、引き継ぎを重ねるたびに担当が溜まって膨らんでいく。
 
     seed を指定すると割り振りが再現可能になる。
     """
@@ -721,8 +798,11 @@ def allocate(
             if not work.assign_one(arcanum):
                 break
 
-    work.seed_carryover(fill=True)  # 段階5.5
-    work.fill_leftover()  # 段階6
+    for arcanum in ordered:  # 段階5.5
+        work.trim_excess(arcanum)
+
+    work.seed_carryover(fill=True)  # 段階6
+    work.fill_leftover()  # 段階7
     work.record_changes()
 
     # 画面に並んでいる順で結果を返す。
@@ -873,12 +953,12 @@ def _build_warnings(roster: Roster, result: AllocationResult) -> list[str]:
             warnings.append(
                 "引き継げなかった担当: " + "、".join(result.carryover.dropped)
             )
-        # 引き継ぎは前回ぶんを減らさないので、必要人数より多い担当も残る。
-        # 枠が窮屈なときは、それが他の奥義の不足として出てくることがある。
+        # 役目の終わった担当は段階5.5で落とすが、それでも前回の顔ぶれを起点に
+        # している以上、ゼロから組んだほうがうまく収まることはある。
         if reduced or uncovered:
             warnings.append(
-                "引き継ぎでは前回より担当を減らさないため、枠が足りないと"
-                "他の奥義にしわ寄せが出ます。不足が気になる場合は"
+                "前回の担当を起点にしているぶん、枠が足りないと他の奥義に"
+                "しわ寄せが出ることがあります。不足が気になる場合は"
                 "「割り振る」でゼロから組み直してください。"
             )
 
