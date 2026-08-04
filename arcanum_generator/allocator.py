@@ -270,8 +270,15 @@ class _Allocator:
     def _reject_reason(self, arcanum: Arcanum, name: str) -> str:
         """その担当を引き継げない理由. 引き継げるなら空文字.
 
-        「今回は参戦しない」が剪定の本体。◎だった人が×になっても担当が残ると、
+        参戦状況による剪定が本体。◎だった人が×になっても担当が残ると、
         枠を食い潰したうえに実際は誰も出ない戦ができてしまう。
+
+        △だけに落ちた人は、代わりに入れる◎〇が実際にいるときにかぎって外す。
+        残したまま頭数に数えると「必要2人」の中身が確実1人+△になり、
+        1人落ちても穴が空かないという2人体制の意味が失われる。
+        ただし代わりがいないのに外すと、結局は通常の段階が△から選び直すので
+        顔ぶれが入れ替わるだけで質は変わらない。実測でも、枠に余裕のない
+        連合では外しても確実な担当の数は1人も増えなかった。
         """
         who = self.member.get(name)
         if who is None:
@@ -283,8 +290,12 @@ class _Allocator:
         if not self.is_eligible(arcanum, name):
             return "前衛でなくなった"
         # 余り埋めの種類は×や－の人にも配る段階なので、参戦では切らない。
-        if not arcanum.fills_leftover and not who.is_assignable():
-            return "今回は参戦しない"
+        if not arcanum.fills_leftover:
+            if not who.is_assignable():
+                return "今回は参戦しない"
+            # _choose は空き枠と前衛の条件も見たうえで候補を返す。
+            if not who.is_primary() and self._choose(arcanum, self.primary):
+                return "△だけになり、確実に出せる人と交代"
         return ""
 
     def _seed_one(self, arcanum: Arcanum, name: str) -> None:
@@ -657,7 +668,7 @@ def allocate(
     段階1〜5では一切枠を取らず、段階6の余り埋めでだけ配る。
 
     0. (引き継ぎ時のみ)前回ぶんのうち、今回も有効な担当を取り込む。
-       参戦しなくなった人などはここで外す(剪定)。
+       参戦しなくなった人、△だけに落ちて代わりがいる人はここで外す(剪定)。
     1. 「瞬時(何度も)」以外の全奥義に1人ずつ確保する(カバレッジ優先)。
        前半必須・前衛向けの奥義を先に処理する。
        担当は◎〇から選び、足りなければ△も使う。

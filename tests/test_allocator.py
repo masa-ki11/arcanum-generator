@@ -1098,23 +1098,82 @@ class CarryoverTest(unittest.TestCase):
         self.assertEqual(len(picked), 2)  # 抜けた分は埋め直される
         self.assertTrue(any("今回は参戦しない" in d for d in second.carryover.dropped))
 
-    def test_downgrade_to_maybe_keeps_the_member_and_adds_backup(self):
-        """◎→△に落ちた人は残したまま、確実に出せる人を足す."""
+    def test_downgrade_to_maybe_is_replaced_when_a_sure_member_is_free(self):
+        """△だけに落ちた人は、代わりの◎〇がいるなら外す.
+
+        残すと「必要2人」の中身が確実1人+△になる。2人にしているのは1人落ちても
+        穴が空かないようにするためなので、△で頭数だけ揃えると意味がない。
+        しかも確実0人ではないため△頼みの警告も出ず、黙って劣化する。
+        """
         roster = Roster(arcana(("神楽", 2)), members(best=6))
+        first = allocate(roster)
+        demoted = self._picked(first, "神楽")
+        for member in roster.members:
+            if member.name in demoted:
+                member.attendance = [ATTEND_MAYBE] * BATTLE_COUNT
+
+        second = allocate(roster, carryover=first.to_carryover())
+        picked = self._picked(second, "神楽")
+        for name in demoted:
+            self.assertNotIn(name, picked)
+        self.assertEqual(len(picked), 2)
+        # ゼロから割り振ったときと同じ質: 各戦とも確実に出せる担当が2人。
+        神楽 = next(a for a in second.assignments if a.arcanum == "神楽")
+        self.assertEqual(神楽.sure_per_battle, [2] * BATTLE_COUNT)
+        self.assertTrue(
+            any("△だけ" in d for d in second.carryover.dropped),
+            second.carryover.dropped,
+        )
+
+    def test_partial_downgrade_keeps_the_member(self):
+        """一部の戦だけ△になった人は残す. どこか1戦でも◎〇なら確実な担当になる."""
+        roster = Roster(
+            arcana(("神楽", 2)),
+            [Member(f"M{i}", [ATTEND_BEST] * BATTLE_COUNT) for i in range(6)],
+        )
         first = allocate(roster)
         kept = self._picked(first, "神楽")
         for member in roster.members:
             if member.name in kept:
-                member.attendance = [ATTEND_MAYBE] * BATTLE_COUNT
+                # 3戦目だけ△。1・2戦目は◎のまま。
+                member.attendance = [ATTEND_BEST, ATTEND_BEST, ATTEND_MAYBE]
 
         second = allocate(roster, carryover=first.to_carryover())
         picked = self._picked(second, "神楽")
         for name in kept:
             self.assertIn(name, picked)
-        self.assertGreater(len(picked), len(kept))
-        # 足された人は◎〇なので、△頼みの戦は残らない。
+        # 3戦目に確実な担当がいないので、そこだけ足される。
         神楽 = next(a for a in second.assignments if a.arcanum == "神楽")
         self.assertEqual(神楽.unsure_battles, [])
+
+    def test_maybe_is_kept_when_no_sure_replacement_exists(self):
+        """代わりの◎〇がいないなら、△だけの人はそのまま残す.
+
+        外しても通常の段階が結局△から選び直すので、確実な担当は1人も増えない。
+        顔ぶれが入れ替わるぶん、引き継ぎの意味だけが失われる。実測でも、
+        枠に余裕のない連合では外しても確実な担当の数は変わらなかった。
+        """
+        roster = Roster(arcana(("神楽", 2)), members(maybe=4))
+        result = allocate(roster, carryover={"神楽": ["△0", "△1"]})
+        self.assertEqual(sorted(self._picked(result, "神楽")), ["△0", "△1"])
+        self.assertEqual(result.carryover.dropped, [])
+
+    def test_maybe_is_kept_when_the_sure_members_cannot_take_it(self):
+        """◎はいても、その奥義に入れないなら△の人は残す(前衛向けの奥義)."""
+        roster = Roster(
+            arcana(("突撃", 2, "絆", False, True)),
+            [
+                Member("◎後衛0", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("◎後衛1", [ATTEND_BEST] * BATTLE_COUNT),
+                Member("△前衛0", [ATTEND_MAYBE] * BATTLE_COUNT, vanguard=True),
+                Member("△前衛1", [ATTEND_MAYBE] * BATTLE_COUNT, vanguard=True),
+            ],
+        )
+        result = allocate(roster, carryover={"突撃": ["△前衛0", "△前衛1"]})
+        # ◎は後衛なので前衛向けの奥義には入れない。△の前衛を残すしかない。
+        self.assertEqual(
+            sorted(self._picked(result, "突撃")), ["△前衛0", "△前衛1"]
+        )
 
     def test_removed_arcanum_and_member_are_reported(self):
         """奥義やメンバーが消えた引き継ぎは、理由付きで外れる."""
