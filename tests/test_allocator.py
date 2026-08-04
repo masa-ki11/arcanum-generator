@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arcanum_generator.allocator import AllocationError, allocate, validate
 from arcanum_generator.models import FILE_VERSION
 from arcanum_generator.models import (
+    ATTENDANCE_LEVELS,
     ATTEND_BEST,
     ATTEND_MAYBE,
     ATTEND_NO,
@@ -1126,7 +1128,11 @@ class CarryoverTest(unittest.TestCase):
         )
 
     def test_partial_downgrade_keeps_the_member(self):
-        """一部の戦だけ△になった人は残す. どこか1戦でも◎〇なら確実な担当になる."""
+        """一部の戦だけ△になった人も候補として残る(◎〇の戦があるため).
+
+        ただし必要人数は2人のままなので、3戦目を埋める人を足したぶん、
+        前回の2人のうち居なくても穴が空かないほうは段階5.5で落ちる。
+        """
         roster = Roster(
             arcana(("神楽", 2)),
             [Member(f"M{i}", [ATTEND_BEST] * BATTLE_COUNT) for i in range(6)],
@@ -1140,11 +1146,39 @@ class CarryoverTest(unittest.TestCase):
 
         second = allocate(roster, carryover=first.to_carryover())
         picked = self._picked(second, "神楽")
-        for name in kept:
-            self.assertIn(name, picked)
-        # 3戦目に確実な担当がいないので、そこだけ足される。
+        # 人数は増えない。前回の2人のうち片方は残る。
+        self.assertEqual(len(picked), 2)
+        self.assertEqual(len(set(picked) & set(kept)), 1)
+        # 3戦目も確実に出せる担当が付く。
         神楽 = next(a for a in second.assignments if a.arcanum == "神楽")
         self.assertEqual(神楽.unsure_battles, [])
+
+    def test_excess_does_not_pile_up_over_days(self):
+        """日を重ねても担当が膨らまない.
+
+        段階2〜4は穴を塞ぐため必要人数を超えて足す。塞ぐ役目を別の担当が
+        引き受けたあとも残し続けると、引き継ぐたびに人数が増えていく。
+        """
+        roster = Roster(
+            arcana(("神楽", 2), ("鼓舞", 2), ("陣", 2)), members(best=6, yes=3)
+        )
+        rng = random.Random(4)
+        carry = allocate(roster).to_carryover()
+        for _ in range(15):
+            for member in roster.members:
+                if rng.random() < 0.3:
+                    member.attendance = [
+                        rng.choice(ATTENDANCE_LEVELS) for _ in range(BATTLE_COUNT)
+                    ]
+            result = allocate(roster, carryover=carry)
+            for assignment in result.assignments:
+                self.assertLessEqual(
+                    len(assignment.members),
+                    # 穴を塞ぐのに超えることはあるが、戦の数までで頭打ち。
+                    max(assignment.required, BATTLE_COUNT),
+                    f"{assignment.arcanum} が {len(assignment.members)}人に膨らんだ",
+                )
+            carry = result.to_carryover()
 
     def test_maybe_is_kept_when_no_sure_replacement_exists(self):
         """代わりの◎〇がいないなら、△だけの人はそのまま残す.
