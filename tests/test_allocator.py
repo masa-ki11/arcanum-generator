@@ -1290,29 +1290,36 @@ class CarryoverMarkTest(unittest.TestCase):
     def _roster(self):
         return Roster(arcana(("神楽", 2), ("鼓舞", 2)), members(best=6))
 
+    @staticmethod
+    def _member_lines(text: str) -> list[str]:
+        """メンバー別の本文だけ. ★は奥義別にも出るので、数えるならここに絞る."""
+        body = text.split("【メンバー別】")[1]
+        return [l for l in body.splitlines()[1:] if l and not l.startswith("※")]
+
     def test_no_mark_when_allocated_from_scratch(self):
         """ゼロから割り振ったときは印を付けない(全員が変更扱いになるため)."""
         text = format_result_text(allocate(self._roster()))
-        self.assertNotIn("←変更", text)
+        self.assertEqual([l for l in self._member_lines(text) if "★" in l], [])
         self.assertNotIn("＊", text)
 
-    @staticmethod
-    def _body(text: str) -> list[str]:
-        """凡例(※で始まる行)を除いた本文の行. 印の数を数えるのに使う."""
-        return [l for l in text.splitlines() if l and not l.startswith("※")]
+    def test_member_header_has_no_arcanum_legend(self):
+        """★・前の説明はメンバー別の見出しに置かない(印が出るのは奥義別)."""
+        text = format_result_text(allocate(self._roster()))
+        header = [l for l in text.splitlines() if l.startswith("【メンバー別】")][0]
+        self.assertEqual(header, "【メンバー別】 参戦は1戦目→3戦目の順")
 
     def test_unchanged_member_gets_no_mark(self):
         roster = self._roster()
         first = allocate(roster)
         text = format_result_text(allocate(roster, carryover=first.to_carryover()))
-        body = "\n".join(self._body(text))
-        self.assertNotIn("←変更", body)
-        self.assertNotIn("＊", body)
+        self.assertEqual([l for l in self._member_lines(text) if "★" in l], [])
+        self.assertNotIn("＊", text)
         # 何も変わっていないことは、印ではなく文で伝える。
         self.assertIn("前回から担当が変わった人はいません", text)
         self.assertNotIn("新しくその奥義の担当", text)
 
-    def test_changed_member_is_marked_with_the_difference(self):
+    def test_changed_member_is_marked_without_the_detail(self):
+        """変わった人の行末に★だけ付く. 何が増減したかは書かない."""
         roster = self._roster()
         first = allocate(roster)
         gone = next(a for a in first.assignments if a.arcanum == "神楽").members[0]
@@ -1322,24 +1329,22 @@ class CarryoverMarkTest(unittest.TestCase):
 
         second = allocate(roster, carryover=first.to_carryover())
         report = second.carryover
-        # 抜けた人は「外れ」、代役は「追加」。
-        self.assertEqual(report.member_removed[gone], ["神楽"])
-        self.assertEqual(report.member_added[gone], [])
-        replacement = next(
-            n for n, v in report.member_added.items() if "神楽" in v
-        )
+        replacement = next(n for n, v in report.member_added.items() if "神楽" in v)
         self.assertEqual(report.changed_members(), {gone, replacement})
 
         text = format_result_text(second)
-        # 代役は奥義別で＊、メンバー別で ←変更(追加 神楽)。
-        self.assertIn(replacement + "＊", text)
-        self.assertIn(f"{replacement}: ", text)
-        self.assertIn("←変更(追加 神楽)", text)
-        self.assertIn("←変更(外れ 神楽)", text)
+        marked = self._member_lines(text)
+        self.assertEqual(
+            sorted(l for l in marked if l.endswith("★")),
+            sorted(l for l in marked if l.split(":")[0].endswith((gone, replacement))),
+        )
+        # 増減の中身は出さない。
+        self.assertNotIn("追加", text)
+        self.assertNotIn("外れ", text)
+        self.assertNotIn("←変更", text)
         self.assertIn("前回から担当が変わったのは2人", text)
-        # 動いていない人の行には印が付かない(凡例を除いて2行だけ)。
-        marked = [l for l in self._body(text) if "←変更" in l]
-        self.assertEqual(len(marked), 2)
+        # 代役は奥義別では今までどおり＊。
+        self.assertIn(replacement + "＊", text.split("【メンバー別】")[0])
 
     def test_swap_shows_both_sides(self):
         """担当が入れ替わった人は 追加 と 外れ の両方が出る."""
@@ -1357,7 +1362,8 @@ class CarryoverMarkTest(unittest.TestCase):
         stale = {"神楽": ["◎0", "◎1"], "廃止": ["◎2"]}
         result = allocate(roster, carryover=stale)
         self.assertEqual(result.carryover.member_removed["◎2"], ["廃止"])
-        self.assertIn("←変更(外れ 廃止)", format_result_text(result))
+        marked = self._member_lines(format_result_text(result))
+        self.assertTrue(any(l.startswith("◎◎◎ ◎2:") and l.endswith("★") for l in marked))
 
     def test_csv_gains_a_change_column_only_when_carried_over(self):
         roster = self._roster()

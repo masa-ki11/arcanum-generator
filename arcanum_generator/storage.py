@@ -26,8 +26,12 @@ FIRST_HALF_MARK = "★"
 VANGUARD_MARK = "前"
 NEW_MARK = "＊"
 """引き継ぎ割り振りで、その奥義に今回から入った人に付ける印."""
-CHANGE_MARK = "←変更"
-"""引き継ぎ割り振りで、担当が増減した人の行に付ける印."""
+CHANGE_MARK = "★"
+"""引き継ぎ割り振りで、担当が増減した人の行に付ける印.
+
+FIRST_HALF_MARK と同じ文字だが、付く場所が違う(あちらは奥義別の奥義名の前、
+こちらはメンバー別の行末)ので、1行の中で意味がぶつかることはない。
+"""
 
 AUTOSAVE_NAME = "kassen.json"
 """プロジェクトフォルダに置く自動保存ファイルの名前."""
@@ -193,10 +197,7 @@ def format_result_text(result: AllocationResult) -> str:
     if carry and any(carry.member_added.values()):
         lines.append(f"※{NEW_MARK}=前回から新しくその奥義の担当になった人")
     lines.append("")
-    lines.append(
-        f"【メンバー別】 {FIRST_HALF_MARK}=前半必須 {VANGUARD_MARK}=前衛向け / "
-        "参戦は1戦目→3戦目の順"
-    )
+    lines.append("【メンバー別】 参戦は1戦目→3戦目の順")
     if carry:
         changed = len(carry.changed_members())
         lines.append(
@@ -210,9 +211,9 @@ def format_result_text(result: AllocationResult) -> str:
     for name, arcana in result.load.items():
         levels = "".join(result.attendance.get(name, []))
         line = f"{levels} {name}: {'、'.join(arcana) if arcana else '-'}"
-        note = carry.change_note(name) if carry else ""
-        if note:
-            line += f" {CHANGE_MARK}({note})"
+        # 何が増えて何が減ったかは書かない。変わったかどうかだけ分かればよい。
+        if carry and carry.change_note(name):
+            line += f" {CHANGE_MARK}"
         lines.append(line)
 
     return "\n".join(lines)
