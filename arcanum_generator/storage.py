@@ -24,6 +24,10 @@ SUPPORTED_VERSIONS = frozenset(range(1, FILE_VERSION + 1))
 
 FIRST_HALF_MARK = "★"
 VANGUARD_MARK = "前"
+NEW_MARK = "＊"
+"""引き継ぎ割り振りで、その奥義に今回から入った人に付ける印."""
+CHANGE_MARK = "←変更"
+"""引き継ぎ割り振りで、担当が増減した人の行に付ける印."""
 
 AUTOSAVE_NAME = "kassen.json"
 """プロジェクトフォルダに置く自動保存ファイルの名前."""
@@ -93,7 +97,12 @@ def load_roster(path: str | Path) -> Roster:
 
 
 def export_csv(result: AllocationResult, path: str | Path) -> None:
-    """割り振り結果をCSVで書き出す(Excelで開ける utf-8-sig)."""
+    """割り振り結果をCSVで書き出す(Excelで開ける utf-8-sig).
+
+    引き継ぎで割り振ったときは、メンバー別に「前回から」の増減列を足す。
+    Excelで絞り込めば、担当が変わった人だけ抜き出せる。
+    """
+    carry = result.carryover
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -113,18 +122,31 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
                     len(assignment.members),
                     *assignment.sure_per_battle,
                     *assignment.per_battle,
-                    "、".join(assignment.members),
+                    _members_text(result, assignment),
                 ]
             )
         writer.writerow([])
         # 前衛は出力に含めない(割り振りの入力としてだけ使う)。
-        writer.writerow(
-            ["メンバー"] + list(BATTLE_LABELS) + ["担当数", "担当奥義"]
-        )
+        header = ["メンバー"] + list(BATTLE_LABELS) + ["担当数", "担当奥義"]
+        if carry:
+            header.append("前回から")
+        writer.writerow(header)
         # load は連合員の並び順で作ってあるので、そのまま出す。
         for name, arcana in result.load.items():
             levels = result.attendance.get(name, [""] * BATTLE_COUNT)
-            writer.writerow([name, *levels, len(arcana), "、".join(arcana)])
+            row = [name, *levels, len(arcana), "、".join(arcana)]
+            if carry:
+                row.append(carry.change_note(name))
+            writer.writerow(row)
+
+
+def _members_text(result: AllocationResult, assignment) -> str:
+    """担当者名を並べる. 引き継ぎで今回その奥義に入った人には印を付ける."""
+    carry = result.carryover
+    return "、".join(
+        name + NEW_MARK if carry and carry.is_new(assignment.arcanum, name) else name
+        for name in assignment.members
+    )
 
 
 def _by_category(result: AllocationResult) -> list:
@@ -138,7 +160,13 @@ def _by_category(result: AllocationResult) -> list:
 
 
 def format_result_text(result: AllocationResult) -> str:
-    """連合チャットにそのまま貼れる形に整形する."""
+    """連合チャットにそのまま貼れる形に整形する.
+
+    引き継ぎで割り振ったときは、前回から変わったところに印を付ける。
+    2日目以降は「自分の担当が変わったかどうか」だけ見れば済むようにするため。
+    ゼロから割り振ったときは全員が変更扱いになって意味がないので付けない。
+    """
+    carry = result.carryover
     lines: list[str] = []
     current_category = None
     for assignment in _by_category(result):
@@ -147,7 +175,7 @@ def format_result_text(result: AllocationResult) -> str:
             if lines:
                 lines.append("")
             lines.append(f"【{current_category}】")
-        members = "、".join(assignment.members) if assignment.members else "(未割当)"
+        members = _members_text(result, assignment) or "(未割当)"
         mark = (FIRST_HALF_MARK if assignment.first_half else "") + (
             VANGUARD_MARK if assignment.for_vanguard else ""
         )
@@ -161,15 +189,30 @@ def format_result_text(result: AllocationResult) -> str:
     lines.append(
         f"※各戦の数字=確実に出せる人数 / △=△頼み / ×=誰も出せない"
     )
+    # 印が1つも付いていないのに凡例だけ出ると、探させてしまうので出さない。
+    if carry and any(carry.member_added.values()):
+        lines.append(f"※{NEW_MARK}=前回から新しくその奥義の担当になった人")
     lines.append("")
     lines.append(
         f"【メンバー別】 {FIRST_HALF_MARK}=前半必須 {VANGUARD_MARK}=前衛向け / "
         "参戦は1戦目→3戦目の順"
     )
+    if carry:
+        changed = len(carry.changed_members())
+        lines.append(
+            f"※前回から担当が変わったのは{changed}人。"
+            f"その行の末尾に {CHANGE_MARK} を付けています"
+            if changed
+            else "※前回から担当が変わった人はいません"
+        )
     # 前衛は出力に含めない(割り振りの入力としてだけ使う)。
     # load は連合員の並び順で作ってあるので、そのまま出す。
     for name, arcana in result.load.items():
         levels = "".join(result.attendance.get(name, []))
-        lines.append(f"{levels} {name}: {'、'.join(arcana) if arcana else '-'}")
+        line = f"{levels} {name}: {'、'.join(arcana) if arcana else '-'}"
+        note = carry.change_note(name) if carry else ""
+        if note:
+            line += f" {CHANGE_MARK}({note})"
+        lines.append(line)
 
     return "\n".join(lines)

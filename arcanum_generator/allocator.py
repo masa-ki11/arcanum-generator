@@ -114,6 +114,10 @@ class CarryoverReport:
     """引き継げなかった担当. 「奥義: 名前(理由)」の形で持つ."""
     added: list[str] = field(default_factory=list)
     """引き継ぎのあとで新しく足された担当."""
+    member_added: dict[str, list[str]] = field(default_factory=dict)
+    """メンバー名 -> 今回から新しく担当することになった奥義."""
+    member_removed: dict[str, list[str]] = field(default_factory=dict)
+    """メンバー名 -> 前回は担当していて今回は外れた奥義."""
 
     @property
     def source_total(self) -> int:
@@ -125,6 +129,25 @@ class CarryoverReport:
             f"前回の担当{self.source_total}件のうち{len(self.kept)}件をそのまま維持、"
             f"{len(self.dropped)}件を外し、{len(self.added)}件を新しく足しました。"
         )
+
+    def changed_members(self) -> set[str]:
+        """担当が1つでも増減したメンバーの名前."""
+        return {name for name, v in self.member_added.items() if v} | {
+            name for name, v in self.member_removed.items() if v
+        }
+
+    def is_new(self, arcanum: str, member: str) -> bool:
+        """その人がその奥義に今回から入ったかどうか."""
+        return arcanum in self.member_added.get(member, ())
+
+    def change_note(self, member: str) -> str:
+        """その人の担当の増減を1行で表す. 変わっていなければ空文字."""
+        parts = []
+        if self.member_added.get(member):
+            parts.append("追加 " + "、".join(self.member_added[member]))
+        if self.member_removed.get(member):
+            parts.append("外れ " + "、".join(self.member_removed[member]))
+        return " / ".join(parts)
 
 
 @dataclass
@@ -307,8 +330,13 @@ class _Allocator:
             for name in self.source.get(arcanum.name, []):
                 self._seed_one(arcanum, name)
 
-    def record_added(self) -> None:
-        """引き継ぎ後に足された担当を洗い出す."""
+    def record_changes(self) -> None:
+        """引き継ぎ前後の差分を洗い出す.
+
+        メンバーごとの増減は、選別の過程ではなく前後の担当そのものを比べて出す。
+        引き継ぎ元で重複していた担当や、いったん外れて別の段階で戻ってきた担当を
+        「変更」に数えてしまわないため。
+        """
         if self.report is None:
             return
         for arcanum in self.roster.arcana:
@@ -316,6 +344,23 @@ class _Allocator:
             for name in self.picked[arcanum.name]:
                 if name not in before:
                     self.report.added.append(f"{arcanum.name}: {name}")
+
+        # 並び順は画面と同じ奥義順にする。今は無い奥義(前回だけの担当)は末尾。
+        order = {a.name: i for i, a in enumerate(self.roster.arcana)}
+
+        def in_screen_order(arcanum_name: str) -> tuple[int, str]:
+            return (order.get(arcanum_name, len(order)), arcanum_name)
+
+        before_by_member: dict[str, set[str]] = {}
+        for arcanum_name, names in self.source.items():
+            for name in names:
+                before_by_member.setdefault(name, set()).add(arcanum_name)
+
+        for name, arcana in self.load.items():
+            was = before_by_member.get(name, set())
+            now = set(arcana)
+            self.report.member_added[name] = sorted(now - was, key=in_screen_order)
+            self.report.member_removed[name] = sorted(was - now, key=in_screen_order)
 
     def uncovered_first_half(self, arcanum: Arcanum) -> set[int]:
         """前半必須の奥義で、まだ◎の担当がいない戦."""
@@ -667,7 +712,7 @@ def allocate(
 
     work.seed_carryover(fill=True)  # 段階5.5
     work.fill_leftover()  # 段階6
-    work.record_added()
+    work.record_changes()
 
     # 画面に並んでいる順で結果を返す。
     assignments = [

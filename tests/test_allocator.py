@@ -27,6 +27,8 @@ from arcanum_generator.models import (
 from arcanum_generator.storage import (
     AUTOSAVE_NAME,
     autosave_path,
+    export_csv,
+    format_result_text,
     load_roster,
     project_dir,
     save_roster,
@@ -1221,6 +1223,108 @@ class CarryoverTest(unittest.TestCase):
         first = allocate(roster)
         second = allocate(roster, carryover=first.to_carryover())
         self.assertTrue(any("【引き継ぎ】" in w for w in second.warnings))
+
+
+class CarryoverMarkTest(unittest.TestCase):
+    """コピー用テキスト・CSVに付く「変わった人」の印."""
+
+    def _roster(self):
+        return Roster(arcana(("神楽", 2), ("鼓舞", 2)), members(best=6))
+
+    def test_no_mark_when_allocated_from_scratch(self):
+        """ゼロから割り振ったときは印を付けない(全員が変更扱いになるため)."""
+        text = format_result_text(allocate(self._roster()))
+        self.assertNotIn("←変更", text)
+        self.assertNotIn("＊", text)
+
+    @staticmethod
+    def _body(text: str) -> list[str]:
+        """凡例(※で始まる行)を除いた本文の行. 印の数を数えるのに使う."""
+        return [l for l in text.splitlines() if l and not l.startswith("※")]
+
+    def test_unchanged_member_gets_no_mark(self):
+        roster = self._roster()
+        first = allocate(roster)
+        text = format_result_text(allocate(roster, carryover=first.to_carryover()))
+        body = "\n".join(self._body(text))
+        self.assertNotIn("←変更", body)
+        self.assertNotIn("＊", body)
+        # 何も変わっていないことは、印ではなく文で伝える。
+        self.assertIn("前回から担当が変わった人はいません", text)
+        self.assertNotIn("新しくその奥義の担当", text)
+
+    def test_changed_member_is_marked_with_the_difference(self):
+        roster = self._roster()
+        first = allocate(roster)
+        gone = next(a for a in first.assignments if a.arcanum == "神楽").members[0]
+        for member in roster.members:
+            if member.name == gone:
+                member.attendance = [ATTEND_NO] * BATTLE_COUNT
+
+        second = allocate(roster, carryover=first.to_carryover())
+        report = second.carryover
+        # 抜けた人は「外れ」、代役は「追加」。
+        self.assertEqual(report.member_removed[gone], ["神楽"])
+        self.assertEqual(report.member_added[gone], [])
+        replacement = next(
+            n for n, v in report.member_added.items() if "神楽" in v
+        )
+        self.assertEqual(report.changed_members(), {gone, replacement})
+
+        text = format_result_text(second)
+        # 代役は奥義別で＊、メンバー別で ←変更(追加 神楽)。
+        self.assertIn(replacement + "＊", text)
+        self.assertIn(f"{replacement}: ", text)
+        self.assertIn("←変更(追加 神楽)", text)
+        self.assertIn("←変更(外れ 神楽)", text)
+        self.assertIn("前回から担当が変わったのは2人", text)
+        # 動いていない人の行には印が付かない(凡例を除いて2行だけ)。
+        marked = [l for l in self._body(text) if "←変更" in l]
+        self.assertEqual(len(marked), 2)
+
+    def test_swap_shows_both_sides(self):
+        """担当が入れ替わった人は 追加 と 外れ の両方が出る."""
+        roster = Roster(arcana(("神楽", 1), ("鼓舞", 1)), members(best=2))
+        stale = {"神楽": ["◎0"], "鼓舞": ["◎0"]}
+        roster.slots_per_member = 1  # ◎0 は1つしか持てない
+        second = allocate(roster, carryover=stale)
+        note = second.carryover.change_note("◎1")
+        self.assertIn("追加", note)
+        self.assertEqual(second.carryover.change_note("◎0").count("追加"), 0)
+
+    def test_removed_arcanum_counts_as_a_change(self):
+        """奥義ごと消えた場合も、担当だった人は変更扱いにする."""
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        stale = {"神楽": ["◎0", "◎1"], "廃止": ["◎2"]}
+        result = allocate(roster, carryover=stale)
+        self.assertEqual(result.carryover.member_removed["◎2"], ["廃止"])
+        self.assertIn("←変更(外れ 廃止)", format_result_text(result))
+
+    def test_csv_gains_a_change_column_only_when_carried_over(self):
+        roster = self._roster()
+        first = allocate(roster)
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = Path(tmp) / "plain.csv"
+            export_csv(first, plain)
+            self.assertNotIn("前回から", plain.read_text(encoding="utf-8-sig"))
+
+            gone = next(a for a in first.assignments if a.arcanum == "神楽").members[0]
+            for member in roster.members:
+                if member.name == gone:
+                    member.attendance = [ATTEND_NO] * BATTLE_COUNT
+            carried = Path(tmp) / "carried.csv"
+            export_csv(allocate(roster, carryover=first.to_carryover()), carried)
+            body = carried.read_text(encoding="utf-8-sig")
+        self.assertIn("前回から", body)
+        self.assertIn("外れ 神楽", body)
+        self.assertIn("追加 神楽", body)
+
+    def test_change_note_is_empty_for_untouched_member(self):
+        roster = self._roster()
+        first = allocate(roster)
+        second = allocate(roster, carryover=first.to_carryover())
+        for name in second.load:
+            self.assertEqual(second.carryover.change_note(name), "")
 
 
 class CarryoverStorageTest(unittest.TestCase):
