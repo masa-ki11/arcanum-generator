@@ -168,6 +168,9 @@ class AllocationResult:
     carryover: CarryoverReport | None = None
     """引き継ぎ割り振りのときだけ入る. ゼロから割り振ったときは None."""
     warnings: list[str] = field(default_factory=list)
+    """人手不足・△頼みなどの困りごと. 結果の末尾に出して連合に共有する."""
+    notes: list[str] = field(default_factory=list)
+    """引き継ぎの内訳や空き枠などの作業用の情報. 結果には出さない."""
 
     def to_carryover(self) -> dict[str, list[str]]:
         """次の日の起点として使える形(奥義名 -> 担当者名)に変換する."""
@@ -820,7 +823,7 @@ def allocate(
         vanguard={name: list(m.vanguard) for name, m in work.member.items()},
         carryover=work.report,
     )
-    result.warnings = _build_warnings(roster, result)
+    result.warnings, result.notes = _build_warnings(roster, result)
     return result
 
 
@@ -858,7 +861,15 @@ def _build_assignment(
     )
 
 
-def _build_warnings(roster: Roster, result: AllocationResult) -> list[str]:
+def _build_warnings(
+    roster: Roster, result: AllocationResult
+) -> tuple[list[str], list[str]]:
+    """(warnings, notes) を返す.
+
+    warnings は人手が足りない・△頼みといった困りごと。結果の末尾に出して
+    連合に共有する。notes は引き継ぎの内訳や空き枠などの作業用の情報で、
+    チャットに貼っても読み手には関係がないので出さない。
+    """
     warnings: list[str] = []
 
     # 「瞬時(何度も)」は余り枠に入れるだけなので、0人でも不足ではない。
@@ -934,32 +945,35 @@ def _build_warnings(roster: Roster, result: AllocationResult) -> list[str]:
             + "、".join(unsure)
         )
 
+    # ここから下は「困りごと」ではなく内訳。結果の末尾には出さない。
+    notes: list[str] = []
+
     idle = result.idle_members()
     if idle:
-        warnings.append(
+        notes.append(
             f"奥義を担当しないメンバーが{len(idle)}人います: " + "、".join(idle)
         )
 
     spare = result.spare_slots
     if spare > 0 and not roster.fill_arcana():
-        warnings.append(
+        notes.append(
             f"{spare}枠が空いています。"
             "「瞬時(何度も)」の奥義を足すと、余った枠をそこで埋められます。"
         )
 
     if result.carryover is not None:
-        warnings.append("【引き継ぎ】" + result.carryover.summary())
+        notes.append("【引き継ぎ】" + result.carryover.summary())
         if result.carryover.dropped:
-            warnings.append(
+            notes.append(
                 "引き継げなかった担当: " + "、".join(result.carryover.dropped)
             )
         # 役目の終わった担当は段階5.5で落とすが、それでも前回の顔ぶれを起点に
         # している以上、ゼロから組んだほうがうまく収まることはある。
         if reduced or uncovered:
-            warnings.append(
+            notes.append(
                 "前回の担当を起点にしているぶん、枠が足りないと他の奥義に"
                 "しわ寄せが出ることがあります。不足が気になる場合は"
                 "「割り振る」でゼロから組み直してください。"
             )
 
-    return warnings
+    return warnings, notes

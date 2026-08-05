@@ -886,10 +886,8 @@ class ArcanumApp(tk.Tk):
         self._autosave()
         self._refresh_result()
         self._update_status()
-        if self.result.warnings:
-            messagebox.showinfo(
-                APP_TITLE, "\n".join(self.result.warnings), parent=self
-            )
+        # 困りごとはダイアログで止めず、結果の末尾に出す(「結果をコピー」に載る)。
+        # 押すたびに読み飛ばすだけのダイアログが出るのを避ける。
 
     def run_carry_allocation(self) -> None:
         """前回の割り振りを引き継いで、変える必要のある担当だけ組み直す."""
@@ -1156,6 +1154,9 @@ class ArcanumApp(tk.Tk):
             detail += ")"
             if self.result.carryover:
                 detail += f" ・ 引き継ぎ {len(self.result.carryover.kept)}件維持"
+            # ダイアログを出さないぶん、困りごとがあること自体はここで知らせる。
+            if self.result.warnings:
+                detail += f" ・ ⚠ 注意{len(self.result.warnings)}件(結果の末尾に記載)"
             self.status_var.set(base + detail)
         elif carry:
             # 結果を捨てたあとでも、翌日ぶんの起点が残っていることを見せる。

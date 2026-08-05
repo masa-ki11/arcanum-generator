@@ -142,6 +142,11 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
             if carry:
                 row.append(carry.change_note(name))
             writer.writerow(row)
+        if result.warnings:
+            writer.writerow([])
+            writer.writerow(["注意"])
+            for warning in result.warnings:
+                writer.writerow([warning])
 
 
 def _members_text(result: AllocationResult, assignment) -> str:
@@ -215,5 +220,12 @@ def format_result_text(result: AllocationResult) -> str:
         if carry and carry.change_note(name):
             line += f" {CHANGE_MARK}"
         lines.append(line)
+
+    # 人手が足りない・△頼みといった困りごとは末尾にまとめる。
+    # 割り振った本人だけでなく、貼られたチャットを読む側にも要る情報なので。
+    if result.warnings:
+        lines.append("")
+        lines.append("【注意】")
+        lines.extend(f"・{w}" for w in result.warnings)
 
     return "\n".join(lines)

@@ -496,7 +496,9 @@ class AllocateTest(unittest.TestCase):
         roster = Roster(arcana(("神楽", 2)), members(yes=4), slots_per_member=1)
         result = allocate(roster, seed=17)
         self.assertEqual(len(result.idle_members()), 2)
-        self.assertTrue(any("担当しないメンバー" in w for w in result.warnings))
+        # 困りごとではなく内訳なので notes 側。結果の末尾には出さない。
+        self.assertTrue(any("担当しないメンバー" in n for n in result.notes))
+        self.assertFalse(any("担当しないメンバー" in w for w in result.warnings))
 
     def test_invalid_roster_raises(self):
         roster = Roster(arcana(("神楽", 2)), members(no=2))
@@ -589,7 +591,8 @@ class CategoryTest(unittest.TestCase):
         result = allocate(roster, seed=23)
         self.assertEqual(result.used_slots, 2)
         self.assertEqual(result.spare_slots, 6)
-        self.assertTrue(any(FILL in w for w in result.warnings))
+        # 空き枠の案内は作る側への助言なので notes 側。
+        self.assertTrue(any(FILL in n for n in result.notes))
 
 
 class VanguardTest(unittest.TestCase):
@@ -1311,11 +1314,14 @@ class CarryoverTest(unittest.TestCase):
         )
         self.assertIn("維持", report.summary())
 
-    def test_warning_mentions_carryover(self):
+    def test_carryover_breakdown_is_a_note_not_a_warning(self):
+        """引き継ぎの内訳は作業用. チャットに貼る結果の末尾には出さない."""
         roster = Roster(arcana(("神楽", 2)), members(best=4))
         first = allocate(roster)
         second = allocate(roster, carryover=first.to_carryover())
-        self.assertTrue(any("【引き継ぎ】" in w for w in second.warnings))
+        self.assertTrue(any("【引き継ぎ】" in n for n in second.notes))
+        self.assertEqual(second.warnings, [])
+        self.assertNotIn("【注意】", format_result_text(second))
 
 
 class CarryoverMarkTest(unittest.TestCase):
@@ -1424,6 +1430,53 @@ class CarryoverMarkTest(unittest.TestCase):
         second = allocate(roster, carryover=first.to_carryover())
         for name in second.load:
             self.assertEqual(second.carryover.change_note(name), "")
+
+
+class ResultWarningTest(unittest.TestCase):
+    """困りごとを結果の末尾に出す(ダイアログでは知らせない)."""
+
+    def _short_handed(self) -> Roster:
+        """人手が足りず、△頼みの戦もできるロスター."""
+        return Roster(
+            arcana(("神楽", 2), ("鼓舞", 2), ("陣", 2)),
+            [
+                Member("◎1戦目", [ATTEND_BEST, ATTEND_NO, ATTEND_NO]),
+                Member("△だけ", [ATTEND_MAYBE] * BATTLE_COUNT),
+            ],
+            slots_per_member=2,
+        )
+
+    def test_no_warning_no_section(self):
+        roster = Roster(arcana(("神楽", 2)), members(best=4))
+        result = allocate(roster)
+        self.assertEqual(result.warnings, [])
+        self.assertNotIn("【注意】", format_result_text(result))
+
+    def test_warnings_land_at_the_end_of_the_text(self):
+        result = allocate(self._short_handed())
+        self.assertTrue(result.warnings)
+        text = format_result_text(result)
+        head, _, tail = text.partition("【注意】")
+        self.assertTrue(head, "【注意】より前に割り振り結果が出ていない")
+        for warning in result.warnings:
+            self.assertIn(f"・{warning}", tail)
+        # 末尾なので、あとに他の見出しは続かない。
+        self.assertNotIn("【", tail)
+
+    def test_short_handed_and_unsure_are_reported(self):
+        result = allocate(self._short_handed())
+        joined = "\n".join(result.warnings)
+        self.assertIn("必要人数に届きませんでした", joined)
+        self.assertIn("△頼み", joined)
+
+    def test_csv_gets_a_warning_block(self):
+        result = allocate(self._short_handed())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            export_csv(result, path)
+            body = path.read_text(encoding="utf-8-sig")
+        self.assertIn("注意", body)
+        self.assertIn(result.warnings[0], body)
 
 
 class CarryoverStorageTest(unittest.TestCase):
