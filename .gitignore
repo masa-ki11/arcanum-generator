@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 
 # 自動保存ファイル(実行時に作られる作業データ)
-# kassen.json
+kassen.json
 *.json.tmp
 *.json.broken
 
