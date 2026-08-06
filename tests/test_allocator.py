@@ -41,14 +41,17 @@ FIXED = "絆"
 
 
 def arcana(*items) -> list[Arcanum]:
-    """(名前, 必要人数[, 種類[, 前半必須[, 前衛向け]]]) から奥義リストを作る."""
+    """(名前, 必要人数[, 種類[, 前半必須[, 前衛向け[, 各戦2人]]]]) から奥義リストを作る."""
     built = []
     for item in items:
         name, required = item[0], item[1]
         category = item[2] if len(item) > 2 else FIXED
         first_half = item[3] if len(item) > 3 else False
         for_vanguard = item[4] if len(item) > 4 else False
-        built.append(Arcanum(name, required, category, first_half, for_vanguard))
+        two_per_battle = item[5] if len(item) > 5 else False
+        built.append(
+            Arcanum(name, required, category, first_half, for_vanguard, two_per_battle)
+        )
     return built
 
 
@@ -804,6 +807,192 @@ class VanguardArcanumTest(unittest.TestCase):
         self.assertEqual([a.for_vanguard for a in restored.arcana], [True, False])
 
 
+class TwoPerBattleTest(unittest.TestCase):
+    """「各戦2人」の奥義は、どの戦にも確実な担当(◎〇)が2人並ぶまで足す."""
+
+    def _split_members(self) -> list[Member]:
+        """どの2人を選んでも3戦は埋まらない顔ぶれ. 各戦に出るのは2人ずつ."""
+        return [
+            Member("AB", [ATTEND_YES, ATTEND_YES, ATTEND_NO]),
+            Member("BC", [ATTEND_NO, ATTEND_YES, ATTEND_YES]),
+            Member("CA", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+        ]
+
+    def test_expands_beyond_required_to_get_two_in_every_battle(self):
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)), self._split_members()
+        )
+        result = allocate(roster, seed=90)
+        assignment = result.assignments[0]
+        self.assertEqual(sorted(assignment.members), ["AB", "BC", "CA"])
+        self.assertEqual(assignment.sure_per_battle, [2, 2, 2])
+        self.assertEqual(assignment.short_pair_battles, [])
+        self.assertEqual(result.warnings, [])
+
+    def test_without_the_flag_two_people_are_enough(self):
+        # 印が無ければ各戦1人以上で足りるので、同じ顔ぶれでも2人で止まる。
+        roster = Roster(arcana(("普通技", 2, FIXED)), self._split_members())
+        result = allocate(roster, seed=90)
+        assignment = result.assignments[0]
+        self.assertEqual(len(assignment.members), 2)
+        self.assertIn(1, assignment.sure_per_battle)
+
+    def test_one_pair_covering_all_battles_is_enough(self):
+        # 3戦とも出る2人がいれば、それ以上は足さない。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            [
+                Member("通し1", [ATTEND_YES] * BATTLE_COUNT),
+                Member("通し2", [ATTEND_YES] * BATTLE_COUNT),
+                Member("予備", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=91)
+        assignment = result.assignments[0]
+        self.assertEqual(len(assignment.members), 2)
+        self.assertEqual(assignment.sure_per_battle, [2, 2, 2])
+
+    def test_second_member_is_not_trimmed_as_redundant(self):
+        # 段階5.5は必要人数2人を超えた担当を落とすが、各戦2人を保つ人は残す。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            self._split_members(),
+            carryover={"双技": ["AB", "BC", "CA"]},
+        )
+        result = allocate(roster, seed=92, carryover=roster.carryover)
+        self.assertEqual(len(result.assignments[0].members), 3)
+        self.assertEqual(result.assignments[0].sure_per_battle, [2, 2, 2])
+
+    def test_warns_when_only_one_sure_member_can_go(self):
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            [
+                Member("通し", [ATTEND_YES] * BATTLE_COUNT),
+                Member("2戦休み", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+            ],
+        )
+        result = allocate(roster, seed=93)
+        assignment = result.assignments[0]
+        self.assertEqual(assignment.sure_per_battle, [2, 1, 2])
+        self.assertEqual(assignment.short_pair_battles, [1])
+        self.assertTrue(any("各戦2人にしたい奥義" in w for w in result.warnings))
+
+    def test_empty_battle_is_reported_only_as_maybe_dependent(self):
+        # 確実な担当が0人の戦は△頼みとして報告する。2人不足には数えない。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            [
+                Member("通し", [ATTEND_YES, ATTEND_MAYBE, ATTEND_YES]),
+                Member("相方", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+            ],
+        )
+        result = allocate(roster, seed=94)
+        assignment = result.assignments[0]
+        self.assertEqual(assignment.unsure_battles, [1])
+        self.assertEqual(assignment.short_pair_battles, [])
+        self.assertTrue(any("△頼み" in w for w in result.warnings))
+        self.assertFalse(any("各戦2人にしたい奥義" in w for w in result.warnings))
+
+    def test_maybe_members_are_not_used_to_pad_the_pair(self):
+        # △を足しても「確実に2人」にはならないので、頭数だけ増やさない。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            [
+                Member("通し", [ATTEND_YES] * BATTLE_COUNT),
+                Member("相方", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+                Member("たぶん", [ATTEND_MAYBE] * BATTLE_COUNT),
+            ],
+        )
+        result = allocate(roster, seed=95)
+        self.assertNotIn("たぶん", result.assignments[0].members)
+
+    def test_other_arcana_get_their_first_member_first(self):
+        # 2人目より先に、全奥義の1人目を確保する(段階1.5は段階1のあと)。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True), ("普通技", 2, FIXED)),
+            [
+                Member("A", [ATTEND_YES] * BATTLE_COUNT),
+                Member("B", [ATTEND_YES] * BATTLE_COUNT),
+            ],
+            slots_per_member=1,
+        )
+        result = allocate(roster, seed=96)
+        self.assertEqual(len(result.assignments[0].members), 1)
+        self.assertEqual(len(result.assignments[1].members), 1)
+
+    def test_pair_is_taken_before_other_arcana_fill_their_battles(self):
+        """最後の1人を、他の奥義の穴埋めより先に「各戦2人」へ回す(段階1.5).
+
+        枠を使い切る連合では、あとに回すと2人目を足せる相手が残らない。
+        他の奥義の穴が増えることもあるが、そちらは印の付いていない奥義なので
+        各戦1人以上を満たせなくても許容する — という優先順位の指定が印の意味。
+        """
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True), ("普通技", 2, FIXED)),
+            [
+                Member("通し", [ATTEND_YES] * BATTLE_COUNT),
+                Member("前2戦", [ATTEND_YES, ATTEND_YES, ATTEND_NO]),
+                Member("3戦のみ", [ATTEND_NO, ATTEND_NO, ATTEND_YES]),
+            ],
+            slots_per_member=1,
+        )
+        result = allocate(roster, seed=99)
+        pair, plain = result.assignments
+        self.assertEqual(sorted(pair.members), ["3戦のみ", "通し"])
+        self.assertEqual(pair.sure_per_battle, [1, 1, 2])
+        # 譲ったぶん、印の無いほうは3戦目が空く。
+        self.assertEqual(plain.members, ["前2戦"])
+        self.assertEqual(plain.thin_battles, [2])
+
+    def test_fill_category_ignores_the_flag(self):
+        # 「瞬時(何度も)」は必要人数を確保しない種類なので、印が付いても効かない。
+        roster = Roster(
+            arcana(("連打", 2, FILL, False, False, True)),
+            [Member("通し", [ATTEND_YES] * BATTLE_COUNT)],
+            slots_per_member=1,
+        )
+        result = allocate(roster, seed=97)
+        assignment = result.assignments[0]
+        self.assertFalse(assignment.two_per_battle)
+        self.assertEqual(assignment.short_pair_battles, [])
+        self.assertEqual(result.warnings, [])
+
+    def test_flag_survives_save_and_load(self):
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True), ("普通技", 2)),
+            members(yes=3),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kassen.json"
+            save_roster(roster, path)
+            restored = load_roster(path)
+        self.assertEqual([a.two_per_battle for a in restored.arcana], [True, False])
+
+    def test_version7_file_without_the_flag_loads_as_off(self):
+        legacy = {
+            "version": 7,
+            "slots_per_member": 4,
+            "arcana": [{"name": "技", "required": 2, "category": FIXED}],
+            "members": [{"name": "A", "attendance": [ATTEND_YES] * BATTLE_COUNT}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "v7.json"
+            path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            restored = load_roster(path)
+        self.assertFalse(restored.arcana[0].two_per_battle)
+
+    def test_mark_appears_in_the_pasted_text(self):
+        from arcanum_generator.storage import PAIR_MARK
+
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True)),
+            members(yes=2),
+        )
+        text = format_result_text(allocate(roster, seed=98))
+        self.assertIn(f"{PAIR_MARK}双技", text)
+        self.assertIn(f"※{PAIR_MARK}=", text)
+
+
 class OutputExcludesVanguardTest(unittest.TestCase):
     """連合員の前衛設定は出力に載せない(奥義側の印は載せる)."""
 
@@ -831,7 +1020,7 @@ class OutputExcludesVanguardTest(unittest.TestCase):
         self.assertNotIn("1戦目の前衛", text)
         self.assertIn("メンバー,1戦目,2戦目,3戦目,担当数,担当奥義", text)
         # 奥義側の「前衛向け」印は残す。
-        self.assertIn("種類,前半必須,前衛向け,奥義", text)
+        self.assertIn("種類,前半必須,前衛向け,各戦2人,奥義", text)
 
 
 class MemberOrderTest(unittest.TestCase):

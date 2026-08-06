@@ -24,6 +24,8 @@ SUPPORTED_VERSIONS = frozenset(range(1, FILE_VERSION + 1))
 
 FIRST_HALF_MARK = "★"
 VANGUARD_MARK = "前"
+PAIR_MARK = "双"
+"""各戦2人(どの戦にも確実な担当が2人)の奥義に付ける印."""
 NEW_MARK = "＊"
 """引き継ぎ割り振りで、その奥義に今回から入った人に付ける印."""
 CHANGE_MARK = "★"
@@ -35,6 +37,20 @@ FIRST_HALF_MARK と同じ文字だが、付く場所が違う(あちらは奥義
 
 AUTOSAVE_NAME = "kassen.json"
 """プロジェクトフォルダに置く自動保存ファイルの名前."""
+
+
+def arcanum_marks(
+    first_half: bool, for_vanguard: bool, two_per_battle: bool
+) -> str:
+    """奥義に付いた印(★=前半必須 / 前=前衛向け / 双=各戦2人)を1つの文字列にする.
+
+    画面の「印」列とチャット用のテキストで同じ並びにするため、ここ1か所で作る。
+    """
+    return (
+        (FIRST_HALF_MARK if first_half else "")
+        + (VANGUARD_MARK if for_vanguard else "")
+        + (PAIR_MARK if two_per_battle else "")
+    )
 
 
 def project_dir() -> Path:
@@ -110,7 +126,7 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
-            ["種類", "前半必須", "前衛向け", "奥義", "必要人数", "担当人数"]
+            ["種類", "前半必須", "前衛向け", "各戦2人", "奥義", "必要人数", "担当人数"]
             + [f"{label}に確実に出せる人数" for label in BATTLE_LABELS]
             + [f"{label}に出られる人数(△含む)" for label in BATTLE_LABELS]
             + ["担当者"]
@@ -121,6 +137,7 @@ def export_csv(result: AllocationResult, path: str | Path) -> None:
                     assignment.category,
                     FIRST_HALF_MARK if assignment.first_half else "",
                     VANGUARD_MARK if assignment.for_vanguard else "",
+                    PAIR_MARK if assignment.two_per_battle else "",
                     assignment.arcanum,
                     assignment.required,
                     len(assignment.members),
@@ -185,8 +202,8 @@ def format_result_text(result: AllocationResult) -> str:
                 lines.append("")
             lines.append(f"【{current_category}】")
         members = _members_text(result, assignment) or "(未割当)"
-        mark = (FIRST_HALF_MARK if assignment.first_half else "") + (
-            VANGUARD_MARK if assignment.for_vanguard else ""
+        mark = arcanum_marks(
+            assignment.first_half, assignment.for_vanguard, assignment.two_per_battle
         )
         marks = "/".join(assignment.battle_marks())
         lines.append(
@@ -198,6 +215,9 @@ def format_result_text(result: AllocationResult) -> str:
     lines.append(
         f"※各戦の数字=確実に出せる人数 / △=△頼み / ×=誰も出せない"
     )
+    # 印が1つも付いていないのに凡例だけ出ると、探させてしまうので出さない。
+    if any(a.two_per_battle for a in result.assignments):
+        lines.append(f"※{PAIR_MARK}=どの戦も確実な担当を2人そろえる奥義")
     # 印が1つも付いていないのに凡例だけ出ると、探させてしまうので出さない。
     if carry and any(carry.member_added.values()):
         lines.append(f"※{NEW_MARK}=前回から新しくその奥義の担当になった人")

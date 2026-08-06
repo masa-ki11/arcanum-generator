@@ -10,8 +10,17 @@ DEFAULT_REQUIRED = 2
 DEFAULT_SLOTS_PER_MEMBER = 4
 """連合員1人が担当できる奥義数の既定値."""
 
+PAIR_PER_BATTLE = 2
+"""「各戦2人」を付けた奥義が、1戦あたりに確保する確実な担当(◎〇)の人数.
 
-FILE_VERSION = 7
+通常の奥義は各戦1人以上いればよい(cover_battles)。この印を付けた奥義だけ、
+どの戦にも◎〇が2人並ぶまで担当を足す。担当の顔ぶれが2人でも、2人とも同じ戦を
+欠ければその戦は1人も出ないので、「必要人数2人」だけでは戦ごとの2人体制に
+ならないため。
+"""
+
+
+FILE_VERSION = 8
 """保存形式のバージョン. 項目を増やしたらここだけ上げる.
 
 読み込み側は 1〜この値 を受け付ける(storage.SUPPORTED_VERSIONS)。
@@ -123,6 +132,13 @@ class Arcanum:
     """前半に無いと困る奥義. 担当には◎の人を優先して充てる."""
     for_vanguard: bool = False
     """前衛に持たせる奥義. どの戦にも前衛の担当が1人以上いるようにする."""
+    two_per_battle: bool = False
+    """どの戦にも確実に出せる担当(◎〇)が2人いるようにする奥義.
+
+    通常は各戦1人以上で足りるものとして扱うが、この印を付けた奥義は
+    1戦ごとに2人そろえる。そのぶん必要人数(既定2人)を超えて3人4人になる。
+    「瞬時(何度も)」は必要人数を確保しない種類なので、付けても効かない。
+    """
 
     @property
     def fills_leftover(self) -> bool:
@@ -145,6 +161,7 @@ class Arcanum:
             "category": self.category,
             "first_half": self.first_half,
             "for_vanguard": self.for_vanguard,
+            "two_per_battle": self.two_per_battle,
         }
 
     @classmethod
@@ -156,6 +173,8 @@ class Arcanum:
             category=str(data.get("category", DEFAULT_CATEGORY)),
             first_half=bool(data.get("first_half", False)),
             for_vanguard=bool(data.get("for_vanguard", False)),
+            # 各戦2人を持たない古い形式は「各戦1人以上でよい」として読む。
+            two_per_battle=bool(data.get("two_per_battle", False)),
         )
 
 

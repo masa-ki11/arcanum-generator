@@ -25,6 +25,10 @@ from .models import (
     get_category,
 )
 from .storage import (
+    FIRST_HALF_MARK,
+    PAIR_MARK,
+    VANGUARD_MARK,
+    arcanum_marks,
     autosave_path,
     export_csv,
     format_result_text,
@@ -35,8 +39,6 @@ from .storage import (
 
 APP_TITLE = "戦国炎舞 奥義割り振り"
 STRATEGIST_MARK = "軍"
-FIRST_HALF_MARK = "★"
-VANGUARD_MARK = "前"
 JSON_FILETYPES = [("割り振り設定", "*.json"), ("すべてのファイル", "*.*")]
 CSV_FILETYPES = [("CSVファイル", "*.csv"), ("すべてのファイル", "*.*")]
 
@@ -53,13 +55,6 @@ PREFERRED_WINDOW_W, PREFERRED_WINDOW_H = 1280, 760
 MIN_WINDOW_W, MIN_WINDOW_H = 1040, 600
 # メニューバー・Dock・タスクバーに隠れないよう空けておく余白。
 SCREEN_MARGIN_W, SCREEN_MARGIN_H = 80, 140
-
-
-def _arcanum_marks(first_half: bool, for_vanguard: bool) -> str:
-    """奥義に付いた印(★=前半必須 / 前=前衛向け)をまとめて1つの文字列にする."""
-    return (FIRST_HALF_MARK if first_half else "") + (
-        VANGUARD_MARK if for_vanguard else ""
-    )
 
 
 class BulkAddDialog(tk.Toplevel):
@@ -283,7 +278,8 @@ class ArcanumApp(tk.Tk):
         self.arcana_tree.heading("required", text="必要人数")
         # 幅を固定しておかないと、パネルが狭いとき「必要人数」列が隠れたまま
         # 横スクロールもできず辿り着けなくなる。
-        self.arcana_tree.column("first_half", width=46, anchor="center", stretch=False)
+        # 印は最大3つ(★前双)並ぶので、その幅を見込んでおく。
+        self.arcana_tree.column("first_half", width=64, anchor="center", stretch=False)
         self.arcana_tree.column("name", width=110, anchor="w", stretch=False)
         self.arcana_tree.column("category", width=104, anchor="w", stretch=False)
         # 最後の列は伸ばして余白を埋めつつ、minwidth を下回ると横スクロールに回す。
@@ -298,6 +294,7 @@ class ArcanumApp(tk.Tk):
         self.arcanum_category_var = tk.StringVar(value=DEFAULT_CATEGORY)
         self.arcanum_first_half_var = tk.BooleanVar(value=False)
         self.arcanum_for_vanguard_var = tk.BooleanVar(value=False)
+        self.arcanum_two_per_battle_var = tk.BooleanVar(value=False)
 
         # grid にして、狭いときは名前欄だけが縮むようにする。pack(side="left") だと
         # Entry が要求幅を譲らず、後ろに置いた「追加」ボタンが枠外に消える。
@@ -347,6 +344,12 @@ class ArcanumApp(tk.Tk):
             text=f"{VANGUARD_MARK} 前衛に割振",
             variable=self.arcanum_for_vanguard_var,
         ).pack(side="left", padx=(10, 0))
+        self.two_per_battle_check = ttk.Checkbutton(
+            first_half_row,
+            text=f"{PAIR_MARK} 各戦2人",
+            variable=self.arcanum_two_per_battle_var,
+        )
+        self.two_per_battle_check.pack(side="left", padx=(10, 0))
 
         buttons = ttk.Frame(frame)
         ttk.Button(buttons, text="選択中を更新", command=self.update_arcanum).pack(
@@ -525,7 +528,7 @@ class ArcanumApp(tk.Tk):
         self.result_tree.heading("per_battle", text="確実 1/2/3戦")
         self.result_tree.heading("members", text="担当者")
         self.result_tree.column("category", width=100, anchor="w", stretch=False)
-        self.result_tree.column("first_half", width=46, anchor="center", stretch=False)
+        self.result_tree.column("first_half", width=64, anchor="center", stretch=False)
         self.result_tree.column("arcanum", width=110, anchor="w", stretch=False)
         self.result_tree.column("required", width=48, anchor="center", stretch=False)
         self.result_tree.column("per_battle", width=84, anchor="center", stretch=False)
@@ -599,6 +602,7 @@ class ArcanumApp(tk.Tk):
                 category=self.arcanum_category_var.get(),
                 first_half=self.arcanum_first_half_var.get(),
                 for_vanguard=self.arcanum_for_vanguard_var.get(),
+                two_per_battle=self.arcanum_two_per_battle_var.get(),
             )
         )
         self.arcanum_name_var.set("")
@@ -624,6 +628,7 @@ class ArcanumApp(tk.Tk):
             category=self.arcanum_category_var.get(),
             first_half=self.arcanum_first_half_var.get(),
             for_vanguard=self.arcanum_for_vanguard_var.get(),
+            two_per_battle=self.arcanum_two_per_battle_var.get(),
         )
         self._changed()
         self._refresh_arcana(select=index)
@@ -658,6 +663,7 @@ class ArcanumApp(tk.Tk):
         self.arcanum_category_var.set(arcanum.category)
         self.arcanum_first_half_var.set(arcanum.first_half)
         self.arcanum_for_vanguard_var.set(arcanum.for_vanguard)
+        self.arcanum_two_per_battle_var.set(arcanum.two_per_battle)
 
     def sort_arcana_by_category(self) -> None:
         """奥義一覧を種類ごとにまとめ直す(種類の中の並びは今の順を保つ)."""
@@ -670,9 +676,10 @@ class ArcanumApp(tk.Tk):
         category = get_category(self.arcanum_category_var.get())
         self.category_hint.configure(text=category.note)
         # 「瞬時(何度も)」は必要人数を確保しないので、入力させない。
-        self.required_spin.configure(
-            state="disabled" if category.fills_leftover else "normal"
-        )
+        # 各戦2人も同じ理由で効かないため、選べないようにしておく。
+        state = "disabled" if category.fills_leftover else "normal"
+        self.required_spin.configure(state=state)
+        self.two_per_battle_check.configure(state=state)
 
     def _on_arcanum_double_click(self, event: tk.Event) -> None:
         row = self.arcana_tree.identify_row(event.y)
@@ -1019,7 +1026,12 @@ class ArcanumApp(tk.Tk):
                 "end",
                 iid=str(index),
                 values=(
-                    _arcanum_marks(arcanum.first_half, arcanum.for_vanguard),
+                    arcanum_marks(
+                        arcanum.first_half,
+                        arcanum.for_vanguard,
+                        # 余り埋め専用の種類には効かないので、印も出さない。
+                        arcanum.two_per_battle and not arcanum.fills_leftover,
+                    ),
                     arcanum.name,
                     arcanum.category,
                     # 余り埋め専用の種類は必要人数を持たない。
@@ -1078,6 +1090,7 @@ class ArcanumApp(tk.Tk):
                 assignment.unsure_battles
                 or assignment.uncovered_first_half
                 or assignment.uncovered_vanguard
+                or assignment.short_pair_battles
             ):
                 tags = ("nobest",)
             elif assignment.extra:
@@ -1090,7 +1103,11 @@ class ArcanumApp(tk.Tk):
                 iid=str(row),
                 values=(
                     assignment.category,
-                    _arcanum_marks(assignment.first_half, assignment.for_vanguard),
+                    arcanum_marks(
+                        assignment.first_half,
+                        assignment.for_vanguard,
+                        assignment.two_per_battle,
+                    ),
                     assignment.arcanum,
                     (
                         f"{len(assignment.members)}"

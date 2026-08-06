@@ -10,10 +10,34 @@ from .models import (
     BATTLE_COUNT,
     BATTLE_LABELS,
     CATEGORY_NAMES,
+    PAIR_PER_BATTLE,
     Arcanum,
     Member,
     Roster,
 )
+
+
+def _constraint_order(arcanum: Arcanum) -> tuple:
+    """制約のきつい奥義から順に処理するための並び順.
+
+    担当を選べる相手が限られる奥義(前半必須・前衛向け)、人数を多く要る奥義
+    (各戦2人・必要人数の多いもの)ほど先。あとから埋め直すのが難しい。
+    """
+    return (
+        not arcanum.first_half,
+        not arcanum.for_vanguard,
+        not arcanum.two_per_battle,
+        -arcanum.required,
+        arcanum.name,
+    )
+
+
+def sure_quota(arcanum: Arcanum) -> int:
+    """その奥義が1戦あたりに確保したい「確実に出せる担当(◎〇)」の人数.
+
+    通常は1人。「各戦2人」を付けた奥義だけ2人。
+    """
+    return PAIR_PER_BATTLE if arcanum.two_per_battle else 1
 
 
 class AllocationError(Exception):
@@ -34,6 +58,7 @@ class Assignment:
     category: str = ""
     first_half: bool = False
     for_vanguard: bool = False
+    two_per_battle: bool = False
     vanguard_battles: list[bool] = field(
         default_factory=lambda: [False] * BATTLE_COUNT
     )
@@ -70,6 +95,22 @@ class Assignment:
             else:
                 marks.append("×")
         return marks
+
+    @property
+    def short_pair_battles(self) -> list[int]:
+        """「各戦2人」なのに、確実に出せる担当が2人に届かなかった戦.
+
+        1人もいない戦は unsure_battles(△頼み)や thin_battles(×)として別に
+        報告するので、ここでは1人しかいない戦だけを挙げる。同じ戦を二重に
+        並べても読み手には区別が付かない。
+        """
+        if not self.two_per_battle:
+            return []
+        return [
+            i
+            for i, sure in enumerate(self.sure_per_battle)
+            if 0 < sure < PAIR_PER_BATTLE
+        ]
 
     @property
     def uncovered_first_half(self) -> list[int]:
@@ -315,11 +356,11 @@ class _Allocator:
         """引き継ぐ順.
 
         枠が足りずに全部は引き継げないとき、あとから埋め直すのが難しい奥義
-        (前半必須・前衛向け)を先に確保しておく。
+        (前半必須・前衛向け・各戦2人)を先に確保しておく。
         """
         return sorted(
             (a for a in self.roster.arcana if a.fills_leftover == fill),
-            key=lambda a: (not a.first_half, not a.for_vanguard, -a.required, a.name),
+            key=_constraint_order,
         )
 
     def seed_carryover(self, fill: bool) -> None:
@@ -397,18 +438,27 @@ class _Allocator:
         }
         return set(range(BATTLE_COUNT)) - covered
 
-    def unsure_battles(self, arcanum: Arcanum) -> set[int]:
-        """確実に出る担当(◎〇)がいない戦.
+    def sure_counts(self, arcanum: Arcanum) -> list[int]:
+        """戦ごとの、確実に出る担当(◎〇)の人数."""
+        counts = [0] * BATTLE_COUNT
+        for name in self.picked[arcanum.name]:
+            for battle in range(BATTLE_COUNT):
+                if self.member[name].is_sure(battle):
+                    counts[battle] += 1
+        return counts
+
+    def unsure_battles(self, arcanum: Arcanum, needed: int = 1) -> set[int]:
+        """確実に出る担当(◎〇)が needed 人に足りていない戦.
 
         △は来ないことがあるので、埋まったとはみなさない。
+        needed は段階ごとに変える。まず全奥義を1人で埋め、そのあと
+        「各戦2人」の奥義だけ2人まで足す。
         """
-        covered = {
+        return {
             battle
-            for name in self.picked[arcanum.name]
-            for battle in range(BATTLE_COUNT)
-            if self.member[name].is_sure(battle)
+            for battle, count in enumerate(self.sure_counts(arcanum))
+            if count < needed
         }
-        return set(range(BATTLE_COUNT)) - covered
 
     def _join_gain(self, name: str, thin: set[int]) -> int:
         """その人を足すと、誰かしら出られるようになる戦の数."""
@@ -495,6 +545,7 @@ class _Allocator:
         need_vanguard_gain: bool = False,
         need_sure_gain: bool = False,
         need_join_gain: bool = False,
+        sure_needed: int = 1,
     ) -> str | None:
         """pool から担当を1人選ぶ. 選べなければ None."""
         held = set(self.picked[arcanum.name])
@@ -512,7 +563,7 @@ class _Allocator:
 
         uncovered = self.uncovered_first_half(arcanum) if arcanum.first_half else set()
         rearguard = self.uncovered_vanguard(arcanum) if arcanum.for_vanguard else set()
-        unsure = self.unsure_battles(arcanum)
+        unsure = self.unsure_battles(arcanum, sure_needed)
         thin = self.thin_battles(arcanum)
 
         if need_best_gain:
@@ -553,6 +604,7 @@ class _Allocator:
         need_vanguard_gain: bool = False,
         need_sure_gain: bool = False,
         need_join_gain: bool = False,
+        sure_needed: int = 1,
     ) -> bool:
         """◎〇から1人充てる. いなければ△から充てる. どちらも無理なら False."""
         for pool in (self.primary, self.fallback):
@@ -563,6 +615,7 @@ class _Allocator:
                 need_vanguard_gain,
                 need_sure_gain,
                 need_join_gain,
+                sure_needed,
             )
             if name is not None:
                 self.load[name].append(arcanum.name)
@@ -595,6 +648,26 @@ class _Allocator:
             if not self.assign_one(arcanum, need_join_gain=True):
                 return
 
+    def cover_battles_twice(self, arcanum: Arcanum) -> None:
+        """「各戦2人」の奥義に、どの戦も◎〇が2人になるまで担当を足す.
+
+        全奥義に1人ずつ配った直後に回す(段階1.5)。この印は「他の奥義を削って
+        でも各戦2人にしたい」という指定なので、他の穴埋めより先に取る。
+        あとに回すと枠が埋まったころには2人目を足せる相手が残っておらず、
+        実測(連合20人×4枠=76枠、必須26奥義)では前衛向けの2件に印を付けた
+        組み合わせで2人未達が出た。先に取ると未達は消え、他の奥義の穴も
+        かえって減った(×が2割減)。動かせる人を先に押さえたほうが、残りを
+        埋める段階で融通が利くため。
+
+        2人目を足せる◎〇がいなければ、そこで諦めて警告に回す。△を足しても
+        「確実に2人」にはならないので、頭数だけ増やすことはしない。
+        """
+        while self.unsure_battles(arcanum, PAIR_PER_BATTLE):
+            if not self.assign_one(
+                arcanum, need_sure_gain=True, sure_needed=PAIR_PER_BATTLE
+            ):
+                return
+
     def cover_first_half(self, arcanum: Arcanum) -> None:
         """前半必須の奥義に、各戦の◎が1人以上入るまで担当を足す.
 
@@ -610,9 +683,14 @@ class _Allocator:
 
         担当を1人外す前後でこれが変わらなければ、その人は居ても居なくても
         同じということなので落としてよい。
+
+        確実な担当だけは有無ではなく人数で見る。「各戦2人」の奥義では
+        2人目も塞いでいる穴のうちなので、有無で比べると2人目が
+        「居なくても同じ」と判定されて落ちてしまう。必要な人数まで数えたら
+        あとは何人いても同じなので、そこで頭打ちにする。
         """
         best: set[int] = set()
-        sure: set[int] = set()
+        sure = [0] * BATTLE_COUNT
         joins: set[int] = set()
         vanguard: set[int] = set()
         for name in names:
@@ -620,15 +698,16 @@ class _Allocator:
             best |= who.best_battles()
             for battle in range(BATTLE_COUNT):
                 if who.is_sure(battle):
-                    sure.add(battle)
+                    sure[battle] += 1
                 if who.joins(battle):
                     joins.add(battle)
                     if who.is_vanguard(battle):
                         vanguard.add(battle)
+        quota = sure_quota(arcanum)
         return (
             frozenset(best) if arcanum.first_half else frozenset(),
             frozenset(vanguard) if arcanum.for_vanguard else frozenset(),
-            frozenset(sure),
+            tuple(min(count, quota) for count in sure),
             frozenset(joins),
         )
 
@@ -741,7 +820,7 @@ def allocate(
     段階1〜6の中身は変わらない — どの段階も「足りるまで足す」ループなので、
     埋まっている前提でそのまま動く。
 
-    7段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
+    8段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
     段階1〜5では一切枠を取らず、段階7の余り埋めでだけ配る。
 
     0. (引き継ぎ時のみ)前回ぶんのうち、今回も有効な担当を取り込む。
@@ -749,16 +828,19 @@ def allocate(
     1. 「瞬時(何度も)」以外の全奥義に1人ずつ確保する(カバレッジ優先)。
        前半必須・前衛向けの奥義を先に処理する。
        担当は◎〇から選び、足りなければ△も使う。
+    1.5「各戦2人」の奥義に、どの戦も確実な担当(◎〇)が2人になるまで足す。
+       全奥義に1人ずつ配った直後、他のどの穴埋めよりも先に取る。
     2. 前半必須の奥義に、各戦の◎が1人以上入るまで担当を足す。
     3. 前衛向けの奥義に、各戦の前衛担当が1人以上入るまで担当を足す。
     4. どの奥義も、各戦に出られる担当が1人以上いるまで足す。
     5. 余裕のある奥義から必要人数(既定2人)まで増やす。ここで人手が尽きた奥義は
        1人担当のままになる — 足りない分だけ2人体制を撤回する。
     5.5 必要人数を超えた担当のうち、居なくても塞げている穴が減らない人を外す。
+       「各戦2人」の奥義では、2人目も塞いでいる穴のうちなので落とさない。
     6. (引き継ぎ時のみ)前回ぶんの「瞬時(何度も)」を、枠が残っていれば戻す。
     7. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
 
-    段階2〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
+    段階1.5〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
     その戦は穴になるので、人数を揃えるより穴を塞ぐほうを先に済ませる。
     ただし塞ぐ役目を別の担当が引き受けたら、超えた分は段階5.5で落とす。
     落とさないと、引き継ぎを重ねるたびに担当が溜まって膨らんでいく。
@@ -774,16 +856,17 @@ def allocate(
     work.seed_carryover(fill=False)  # 段階0
 
     # 必ず確保する奥義だけを、制約のきついものから順に処理する。
-    ordered = sorted(
-        roster.required_arcana(),
-        key=lambda a: (not a.first_half, not a.for_vanguard, -a.required, a.name),
-    )
+    ordered = sorted(roster.required_arcana(), key=_constraint_order)
 
     for arcanum in ordered:  # 段階1
         # 引き継ぎで既に担当がいる奥義は飛ばす。ここで無条件に足すと、
         # 前回と同じ入力でも毎回1人ずつ増えてしまう。
         if not work.picked[arcanum.name]:
             work.assign_one(arcanum)
+
+    for arcanum in ordered:  # 段階1.5
+        if arcanum.two_per_battle:
+            work.cover_battles_twice(arcanum)
 
     for arcanum in ordered:  # 段階2
         if arcanum.first_half:
@@ -854,6 +937,8 @@ def _build_assignment(
         category=arcanum.category,
         first_half=arcanum.first_half,
         for_vanguard=arcanum.for_vanguard,
+        # 「瞬時(何度も)」は必要人数を確保しない種類なので、印が付いていても効かない。
+        two_per_battle=arcanum.two_per_battle and not arcanum.fills_leftover,
         vanguard_battles=vanguard,
         per_battle=per_battle,
         sure_per_battle=sure_per_battle,
@@ -943,6 +1028,17 @@ def _build_warnings(
         warnings.append(
             "確実に出せる担当(◎〇)がおらず、△頼みになっている戦があります: "
             + "、".join(unsure)
+        )
+
+    short_pair = [
+        f"{a.arcanum}({'、'.join(BATTLE_LABELS[b] for b in a.short_pair_battles)})"
+        for a in mandatory
+        if a.short_pair_battles
+    ]
+    if short_pair:
+        warnings.append(
+            f"各戦{PAIR_PER_BATTLE}人にしたい奥義で、確実に出せる担当が1人しか"
+            "いない戦があります: " + "、".join(short_pair)
         )
 
     # ここから下は「困りごと」ではなく内訳。結果の末尾には出さない。
