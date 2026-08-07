@@ -300,6 +300,7 @@ class _Allocator:
         self.rng = rng
         fill_members = roster.fill_members()
         self.member: dict[str, Member] = {m.name: m for m in fill_members}
+        self.arcanum: dict[str, Arcanum] = {a.name: a for a in roster.arcana}
         self.load: dict[str, list[str]] = {m.name: [] for m in fill_members}
         self.picked: dict[str, list[str]] = {a.name: [] for a in roster.arcana}
         self.primary = [m.name for m in roster.primary_members()]
@@ -711,6 +712,145 @@ class _Allocator:
             frozenset(joins),
         )
 
+    def _redundant_in(self, arcanum: Arcanum, name: str) -> bool:
+        """その奥義から name を外しても、塞げている穴が減らないかどうか."""
+        picked = self.picked[arcanum.name]
+        rest = [n for n in picked if n != name]
+        return self._coverage(arcanum, rest) == self._coverage(arcanum, picked)
+
+    def _move(self, name: str, source: Arcanum, dest: Arcanum) -> None:
+        """担当を1人、奥義から奥義へ移す."""
+        self.picked[source.name].remove(name)
+        self.load[name].remove(source.name)
+        self.picked[dest.name].append(name)
+        self.load[name].append(dest.name)
+
+    def _refill(self, arcanum: Arcanum, before: tuple) -> None:
+        """引き抜いたぶんの穴を、元と同じだけ塞げるまで埋め直す.
+
+        通常の段階と同じ順で埋める。塞ぎきれなければ呼び出し側が取り消す。
+        """
+        quota = sure_quota(arcanum)
+        while self._coverage(arcanum, self.picked[arcanum.name]) != before:
+            if not self.assign_one(arcanum, need_sure_gain=True, sure_needed=quota):
+                break
+        if arcanum.first_half:
+            self.cover_first_half(arcanum)
+        if arcanum.for_vanguard:
+            self.cover_vanguard(arcanum)
+        while self._coverage(arcanum, self.picked[arcanum.name]) != before:
+            if not self.assign_one(arcanum, need_join_gain=True):
+                break
+        while len(self.picked[arcanum.name]) < arcanum.required:
+            if not self.assign_one(arcanum):
+                break
+
+    def _rollback(
+        self, arcanum: Arcanum, snapshot: list[str], name: str, target: Arcanum
+    ) -> None:
+        """引き抜きを取り消して、手を付ける前の顔ぶれに戻す."""
+        for added in [n for n in self.picked[arcanum.name] if n not in snapshot]:
+            self.load[added].remove(arcanum.name)
+        self.picked[arcanum.name] = list(snapshot)
+        self.picked[target.name].remove(name)
+        self.load[name].remove(target.name)
+        # 埋め直しが本人を呼び戻していれば、担当はもう戻っている。
+        if arcanum.name not in self.load[name]:
+            self.load[name].append(arcanum.name)
+
+    def _swap_in(self, target: Arcanum, battle: int, sure: bool = True) -> bool:
+        """その戦を埋められる人を、他の奥義から引き抜いて移す.
+
+        sure=True は確実に出せる担当(◎〇)だけを探す。sure=False は△も含めて
+        「その戦に出られる人」を探す — 誰も出られない戦(×)を埋めるとき用。
+
+        引き抜けるのは、抜けた跡を埋め直せる相手だけ。塞げていた穴も必要人数も
+        引き抜く前と同じところまで戻せなければ、その手は使わず次の候補を試す。
+        穴を別の奥義に移し替えるだけでは何も良くならない。
+
+        余分な担当(外しても穴が減らない人)から先に試す。埋め直しが要らない
+        ぶん、動く人数が少なくて済む。それが尽きたら、埋め直しの効く相手を
+        試す — 「中国 = tetsu(◎◎×) + OMEGA(△◎◎)」のように2戦目では
+        余っていても1戦目のカバーを担っている担当は、1戦目を確実に出られる
+        空き枠の人と入れ替えれば引き抜ける。
+        """
+        held = set(self.picked[target.name])
+        moves: list[tuple[str, Arcanum]] = []
+        for name, who in self.member.items():
+            if name in held:
+                continue
+            if not (who.is_sure(battle) if sure else who.joins(battle)):
+                continue
+            if not self.is_eligible(target, name):
+                continue
+            for other_name in self.load[name]:
+                other = self.arcanum[other_name]
+                # 「瞬時(何度も)」はこの段階ではまだ配っていない。念のため除く。
+                if other_name == target.name or other.fills_leftover:
+                    continue
+                moves.append((name, other))
+        self.rng.shuffle(moves)
+        moves.sort(key=lambda move: not self._redundant_in(move[1], move[0]))
+
+        for name, other in moves:
+            snapshot = list(self.picked[other.name])
+            before = self._coverage(other, snapshot)
+            # 元から必要人数に足りていない奥義は、そこまで戻せれば十分。
+            keep = min(other.required, len(snapshot))
+            self._move(name, other, target)
+            self._refill(other, before)
+            picked = self.picked[other.name]
+            if self._coverage(other, picked) == before and len(picked) >= keep:
+                return True
+            self._rollback(other, snapshot, name, target)
+        return False
+
+    def cover_by_swap(self, arcanum: Arcanum) -> None:
+        """確実な担当(◎〇)が足りない戦を、他の奥義からの引き抜きで埋める.
+
+        段階4までは空き枠のある人からしか担当を足せない。引き継ぎで全員の枠が
+        埋まっていると、前回の顔ぶれがたまたま同じ戦に強い2人組だった奥義に
+        余分な担当が居座り、その戦を埋められない奥義が△頼みのまま残る。
+        実測(連合20人×4枠、必須26奥義)では、2戦目を確実に出られる8人の32枠の
+        うち4枠がこの重複で死んでいた。ここで余分を引き抜いて回す。
+
+        引き抜いた跡は埋め直せるときだけ動かすので、向こうの穴と引き換えに
+        することはない。「各戦2人」の奥義は2人目まで引き抜いてよい
+        (印の優先順位どおり)。
+
+        この段階は必ず段階5.5(役目の終わった担当を落とす)より後に置く。
+        段階2〜4が穴埋めのために増やした担当が残ったままだと枠が塞がっていて、
+        引き抜いた跡に入れる代わりがいない。実データでは、先に落とすかどうかで
+        11枠ぶんの差が出て、落としてからでないと羊の2戦目が埋まらなかった。
+        """
+        needed = sure_quota(arcanum)
+        while self.unsure_battles(arcanum, needed):
+            # 段階5.5で空いた枠があるなら、引き抜くまでもなく足せる。
+            if self.assign_one(arcanum, need_sure_gain=True, sure_needed=needed):
+                continue
+            if not self._swap_any(arcanum, self.unsure_battles(arcanum, needed)):
+                break
+
+        # 確実な担当を回せなかった戦は、△でもいいから誰か回す。
+        # 段階4は空き枠のある人からしか足せないので、引き継ぎで△の担当が
+        # 「他の人で足りている奥義」に居座っていると、その人しか出られない戦が
+        # ×のまま残る。実データでは、1戦目に出られる唯一の△が、確実な担当の
+        # いる奥義に付いていたせいで猿の1戦目が×になっていた。
+        while self.thin_battles(arcanum):
+            if self.assign_one(arcanum, need_join_gain=True):
+                continue
+            if not self._swap_any(arcanum, self.thin_battles(arcanum), sure=False):
+                return
+
+    def _swap_any(
+        self, arcanum: Arcanum, battles: set[int], sure: bool = True
+    ) -> bool:
+        """穴の空いた戦のどれか1つを引き抜きで埋める. 1人移せたら True.
+
+        1人移すと複数の戦が同時に埋まることがあるので、呼び出し側で数え直す。
+        """
+        return any(self._swap_in(arcanum, battle, sure) for battle in sorted(battles))
+
     def _droppable(self, arcanum: Arcanum) -> str | None:
         """外しても塞げている穴が減らない担当のうち、いちばん外してよい人.
 
@@ -719,12 +859,7 @@ class _Allocator:
         そのうえで担当数の多い人から外す。枠が空けば他の奥義や余り埋めに回せる。
         """
         picked = self.picked[arcanum.name]
-        keep = self._coverage(arcanum, picked)
-        candidates = [
-            name
-            for name in picked
-            if self._coverage(arcanum, [n for n in picked if n != name]) == keep
-        ]
+        candidates = [name for name in picked if self._redundant_in(arcanum, name)]
         if not candidates:
             return None
         carried = set(self.source.get(arcanum.name, ()))
@@ -820,8 +955,8 @@ def allocate(
     段階1〜6の中身は変わらない — どの段階も「足りるまで足す」ループなので、
     埋まっている前提でそのまま動く。
 
-    8段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
-    段階1〜5では一切枠を取らず、段階7の余り埋めでだけ配る。
+    9段階で配る。「瞬時(何度も)」は必ず入れる奥義ではないので、
+    段階1〜5.5では一切枠を取らず、段階7の余り埋めでだけ配る。
 
     0. (引き継ぎ時のみ)前回ぶんのうち、今回も有効な担当を取り込む。
        参戦しなくなった人、△だけに落ちて代わりがいる人はここで外す(剪定)。
@@ -837,10 +972,14 @@ def allocate(
        1人担当のままになる — 足りない分だけ2人体制を撤回する。
     5.5 必要人数を超えた担当のうち、居なくても塞げている穴が減らない人を外す。
        「各戦2人」の奥義では、2人目も塞いでいる穴のうちなので落とさない。
+    5.7 それでも確実な担当(◎〇)がいない戦は、他の奥義から担当を引き抜いて回す。
+       枠が全部埋まっていても動かせる、最後の手段。段階5.5より後に置く —
+       引き抜いた跡を代わりで埋めるには空き枠が要るため。
+    5.9 引き抜きで必要人数を超えたぶんを、もう一度落とす。
     6. (引き継ぎ時のみ)前回ぶんの「瞬時(何度も)」を、枠が残っていれば戻す。
     7. 残った枠を「瞬時(何度も)」系の奥義で埋める。この段階だけは×や－の人にも配る。
 
-    段階1.5〜4は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
+    段階1.5〜4と5.2は必要人数を超えることがある。2人いても両方が同じ戦を欠けば
     その戦は穴になるので、人数を揃えるより穴を塞ぐほうを先に済ませる。
     ただし塞ぐ役目を別の担当が引き受けたら、超えた分は段階5.5で落とす。
     落とさないと、引き継ぎを重ねるたびに担当が溜まって膨らんでいく。
@@ -885,6 +1024,13 @@ def allocate(
                 break
 
     for arcanum in ordered:  # 段階5.5
+        work.trim_excess(arcanum)
+
+    for arcanum in ordered:  # 段階5.7
+        work.cover_by_swap(arcanum)
+
+    # 引き抜きで必要人数を超えたぶんを落とし直す。
+    for arcanum in ordered:  # 段階5.9
         work.trim_excess(arcanum)
 
     work.seed_carryover(fill=True)  # 段階6

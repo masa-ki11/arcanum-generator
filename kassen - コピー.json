@@ -164,6 +164,14 @@
       "two_per_battle": false
     },
     {
+      "name": "咲花",
+      "required": 2,
+      "category": "瞬時(何度も)",
+      "first_half": false,
+      "for_vanguard": false,
+      "two_per_battle": false
+    },
+    {
       "name": "火竜",
       "required": 2,
       "category": "絆",
@@ -332,9 +340,9 @@
     {
       "name": "BLUE",
       "attendance": [
-        "◎",
-        "◎",
-        "◎"
+        "－",
+        "－",
+        "－"
       ],
       "is_strategist": false,
       "vanguard": [
@@ -346,9 +354,9 @@
     {
       "name": "ピコ",
       "attendance": [
+        "◎",
         "－",
-        "－",
-        "－"
+        "×"
       ],
       "is_strategist": false,
       "vanguard": [
@@ -374,7 +382,7 @@
     {
       "name": "ゼロ",
       "attendance": [
-        "◎",
+        "〇",
         "◎",
         "◎"
       ],
@@ -394,7 +402,7 @@
       ],
       "is_strategist": false,
       "vanguard": [
-        true,
+        false,
         true,
         false
       ]

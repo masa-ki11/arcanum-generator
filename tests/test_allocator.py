@@ -993,6 +993,334 @@ class TwoPerBattleTest(unittest.TestCase):
         self.assertIn(f"※{PAIR_MARK}=", text)
 
 
+class RescueSwapTest(unittest.TestCase):
+    """段階5.2: 枠が埋まっていても、余っている担当を引き抜いて穴を埋める.
+
+    引き継ぎで全員の枠が埋まると、段階4までは担当を足せない。前回の顔ぶれが
+    たまたま同じ戦に強い2人組だった奥義には余分が居座るので、そこから回す。
+    """
+
+    # 3戦とも確実に出られる人と、1戦目しか出られない人。
+    ALL = [ATTEND_YES] * BATTLE_COUNT
+    FIRST_ONLY = [ATTEND_YES, ATTEND_NO, ATTEND_NO]
+
+    def test_redundant_member_is_pulled_to_fill_a_hole(self):
+        """A の全戦確実な2人のうち片方は余分なので、穴の空いた B へ回す.
+
+        枠は1人1つで全員が埋まっている。段階4までは誰も足せない盤面。
+        引き抜いたあとの B は必要人数1に対して2人になるので、段階5.5で
+        1戦しか出られないほうが落ちる — 残るのは全戦を1人で賄える顔ぶれ。
+        """
+        roster = Roster(
+            arcana(("A", 1), ("B", 1)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["通し1", "通し2"], "B": ["1戦のみ"]},
+        )
+        result = allocate(roster, seed=120, carryover=roster.carryover)
+        a, b = result.assignments
+        self.assertTrue(set(b.members) & {"通し1", "通し2"})
+        self.assertEqual(b.unsure_battles, [])
+        self.assertEqual(b.thin_battles, [])
+        self.assertEqual(a.unsure_battles, [])  # 引き抜いた側にも穴は空かない
+        self.assertEqual(result.warnings, [])
+
+    def test_non_redundant_member_is_pulled_when_a_stand_in_exists(self):
+        """余分でない担当でも、抜けた跡を埋められるなら引き抜く.
+
+        実データの「中国 = tetsu(◎◎×) + OMEGA(△◎◎)」の形。tetsu は2戦目では
+        余っているが1戦目のカバーを担っているので、そのままでは抜けない。
+        1戦目を確実に出られる空き枠の人と入れ替えれば引き抜ける。
+        """
+        roster = Roster(
+            arcana(("A", 2), ("B", 2)),
+            [
+                Member("前2戦", [ATTEND_YES, ATTEND_YES, ATTEND_NO]),
+                Member("後2戦", [ATTEND_NO, ATTEND_YES, ATTEND_YES]),
+                Member("1戦のみ", self.FIRST_ONLY),
+                Member("3戦のみ", [ATTEND_NO, ATTEND_NO, ATTEND_YES]),
+                Member("控え", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["前2戦", "後2戦"], "B": ["1戦のみ", "3戦のみ"]},
+        )
+        result = allocate(roster, seed=129, carryover=roster.carryover)
+        a, b = result.assignments
+        # B の2戦目を埋められるのは前2戦か後2戦だけ。どちらも A では余分でない。
+        self.assertTrue(set(b.members) & {"前2戦", "後2戦"})
+        self.assertEqual(b.unsure_battles, [])
+        self.assertIn("控え", a.members)  # 抜けた1戦目を埋める代わり
+        self.assertEqual(a.unsure_battles, [])
+        self.assertFalse(a.is_short)
+        self.assertEqual(result.warnings, [])
+
+    def test_no_swap_when_the_donor_would_lose_a_battle(self):
+        # A の2人は塞いでいる戦が違う。代わりもいないので引き抜かない。
+        roster = Roster(
+            arcana(("A", 1), ("B", 1)),
+            [
+                Member("前2戦", [ATTEND_YES, ATTEND_YES, ATTEND_NO]),
+                Member("後2戦", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+                Member("1戦のみ", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["前2戦", "後2戦"], "B": ["1戦のみ"]},
+        )
+        result = allocate(roster, seed=121, carryover=roster.carryover)
+        a, b = result.assignments
+        self.assertEqual(sorted(a.members), ["前2戦", "後2戦"])
+        self.assertEqual(b.members, ["1戦のみ"])
+        self.assertEqual(b.thin_battles, [1, 2])
+
+    def test_donor_is_refilled_so_it_keeps_its_required_count(self):
+        # 引き抜くと必要人数を割る奥義には、空いている人を代わりに入れる。
+        roster = Roster(
+            arcana(("A", 2), ("B", 2)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ1", self.FIRST_ONLY),
+                Member("1戦のみ2", self.FIRST_ONLY),
+                Member("控え", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={
+                "A": ["通し1", "通し2"],
+                "B": ["1戦のみ1", "1戦のみ2"],
+            },
+        )
+        result = allocate(roster, seed=122, carryover=roster.carryover)
+        a, b = result.assignments
+        self.assertEqual(len(a.members), 2)
+        self.assertIn("控え", a.members)  # 引き抜いたぶんの代わり
+        self.assertEqual(b.unsure_battles, [])
+        self.assertFalse(a.is_short)
+        self.assertFalse(b.is_short)
+
+    def test_no_swap_when_the_donor_cannot_be_refilled(self):
+        # 代わりが入らないなら引き抜かない。穴を別の奥義に移し替えても意味がない。
+        roster = Roster(
+            arcana(("A", 2), ("B", 2)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ1", self.FIRST_ONLY),
+                Member("1戦のみ2", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={
+                "A": ["通し1", "通し2"],
+                "B": ["1戦のみ1", "1戦のみ2"],
+            },
+        )
+        result = allocate(roster, seed=123, carryover=roster.carryover)
+        a, b = result.assignments
+        self.assertEqual(sorted(a.members), ["通し1", "通し2"])
+        self.assertEqual(sorted(b.members), ["1戦のみ1", "1戦のみ2"])
+        self.assertEqual(b.thin_battles, [1, 2])
+
+    def test_pair_arcanum_is_rescued_up_to_two(self):
+        # 「各戦2人」の奥義は2人目まで引き抜く。印の優先順位どおり。
+        roster = Roster(
+            arcana(("双技", 2, FIXED, False, False, True), ("普通技", 2)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("通し3", self.ALL),
+                Member("後2戦", [ATTEND_YES, ATTEND_NO, ATTEND_YES]),
+                Member("控え", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"双技": ["通し1", "後2戦"], "普通技": ["通し2", "通し3"]},
+        )
+        result = allocate(roster, seed=124, carryover=roster.carryover)
+        pair, plain = result.assignments
+        # 普通技の全戦確実な2人は片方が余分。それを双技の2人目に回す。
+        self.assertEqual(pair.short_pair_battles, [])
+        self.assertTrue(all(n >= 2 for n in pair.sure_per_battle))
+        self.assertFalse(plain.is_short)
+        self.assertIn("控え", plain.members)  # 引き抜いたぶんの代わり
+
+    def test_free_slots_are_used_before_taking_from_others(self):
+        # 空き枠のある人がいるなら段階4で足りる。引き抜きは最後の手段。
+        roster = Roster(
+            arcana(("A", 1), ("B", 1)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ", self.FIRST_ONLY),
+                Member("空き", self.ALL),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["通し1", "通し2"], "B": ["1戦のみ"]},
+        )
+        result = allocate(roster, seed=125, carryover=roster.carryover)
+        b = result.assignments[1]
+        self.assertIn("空き", b.members)
+        self.assertEqual(b.unsure_battles, [])
+
+    def test_maybe_members_are_not_pulled_to_fix_a_maybe_dependent_battle(self):
+        """既に誰か出られる戦に、△を足しても意味がないので引き抜かない.
+
+        Y はどの戦も△頼み(出られる人はいるが確実ではない)。ここに別の△を
+        足しても「確実に出せる」ようにはならないので動かさない。
+        奥義名は引き継ぎを取り込む順(制約のきつい順、同着は名前順)に効くので、
+        △の2人を持つ奥義を最後に置いて剪定に掛からないようにしている。
+        """
+        roster = Roster(
+            arcana(("X", 1), ("Y", 1), ("Z", 1)),
+            [
+                Member("通し", self.ALL),
+                Member("ゆる", [ATTEND_MAYBE] * BATTLE_COUNT),
+                Member("たぶん1", [ATTEND_MAYBE] * BATTLE_COUNT),
+                Member("たぶん2", [ATTEND_MAYBE] * BATTLE_COUNT),
+            ],
+            slots_per_member=1,
+            carryover={
+                "X": ["通し"],
+                "Y": ["ゆる"],
+                "Z": ["たぶん1", "たぶん2"],
+            },
+        )
+        result = allocate(roster, seed=126, carryover=roster.carryover)
+        y = result.assignments[1]
+        # 通しは X で唯一の担当なので引き抜けない。Z の余った△は足しても無駄。
+        self.assertEqual(y.members, ["ゆる"])
+        self.assertEqual(y.thin_battles, [])
+        self.assertEqual(y.unsure_battles, [0, 1, 2])
+
+    def test_maybe_member_is_pulled_to_fill_an_empty_battle(self):
+        """誰も出られない戦(×)なら、△でも引き抜いて回す.
+
+        △頼みでも、誰も出られないよりはまし。段階4は空き枠のある人からしか
+        足せないので、引き継ぎで△の担当が「他の人で足りている奥義」に居座ると
+        その人しか出られない戦が×のまま残る。
+        """
+        roster = Roster(
+            arcana(("X", 1), ("Y", 1), ("Z", 1)),
+            [
+                Member("通し", self.ALL),
+                Member("1戦のみ", self.FIRST_ONLY),
+                Member("たぶん1", [ATTEND_MAYBE] * BATTLE_COUNT),
+                Member("たぶん2", [ATTEND_MAYBE] * BATTLE_COUNT),
+            ],
+            slots_per_member=1,
+            carryover={
+                "X": ["通し"],
+                "Y": ["1戦のみ"],  # 2戦目3戦目は誰も出られない
+                "Z": ["たぶん1", "たぶん2"],  # 片方は居なくても穴が空かない
+            },
+        )
+        result = allocate(roster, seed=132, carryover=roster.carryover)
+        y = result.assignments[1]
+        self.assertEqual(len(y.members), 2)
+        self.assertEqual(y.thin_battles, [])  # ×は消えた
+        self.assertEqual(y.unsure_battles, [1, 2])  # △頼みにはなる
+
+    def test_excess_is_dropped_before_swapping(self):
+        """役目の終わった担当を落としてから引き抜く(段階5.5 → 5.7).
+
+        引き抜いた跡を代わりで埋めるには空き枠が要る。段階2〜4が穴埋めのために
+        増やした担当が残ったままだと枠が塞がっていて、代わりを入れられない。
+
+        ここでは C の「おまけ」が余分なので段階5.5で落ちて枠が空く。その枠が
+        あってはじめて、B から2戦目要員を引き抜いて B を埋め直せる。
+        引き抜きを先にすると、どの候補も埋め直せずに全部取り消される。
+        """
+        roster = Roster(
+            arcana(("A", 2), ("B", 2), ("C", 1)),
+            [
+                Member("通し", self.ALL),
+                Member("2戦目", [ATTEND_NO, ATTEND_YES, ATTEND_NO]),
+                Member("1戦のみ", self.FIRST_ONLY),
+                Member("3戦のみ", [ATTEND_NO, ATTEND_NO, ATTEND_YES]),
+                Member("予備", self.ALL),
+                Member("おまけ", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={
+                "A": ["1戦のみ", "3戦のみ"],  # 2戦目に確実な担当がいない
+                "B": ["通し", "2戦目"],  # 2戦目要員が余っている
+                "C": ["予備", "おまけ"],  # おまけは居なくても穴が空かない
+            },
+        )
+        result = allocate(roster, seed=130, carryover=roster.carryover)
+        a, b, c = result.assignments
+        self.assertIn("2戦目", a.members)
+        self.assertEqual(a.unsure_battles, [])
+        self.assertEqual(a.thin_battles, [])
+        self.assertEqual(b.unsure_battles, [])  # 引き抜いた側も穴は空かない
+        self.assertFalse(b.is_short)
+        self.assertFalse(c.is_short)
+        self.assertEqual(result.warnings, [])
+
+    def test_swap_does_not_leave_extra_members_behind(self):
+        """引き抜きで必要人数を超えたぶんは、段階5.9でもう一度落とす.
+
+        B は引き抜きで2人になるが、必要人数は1人。通しが3戦とも賄うので
+        1戦のみは居なくても穴が空かない — 残すと引き継ぐたびに溜まっていく。
+        """
+        roster = Roster(
+            arcana(("A", 1), ("B", 1)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["通し1", "通し2"], "B": ["1戦のみ"]},
+        )
+        result = allocate(roster, seed=131, carryover=roster.carryover)
+        for assignment in result.assignments:
+            self.assertEqual(
+                len(assignment.members), assignment.required, assignment.arcanum
+            )
+            self.assertEqual(assignment.unsure_battles, [], assignment.arcanum)
+
+    def test_swap_respects_slots_and_makes_no_duplicates(self):
+        # 引き抜きは移すだけ。枠の上限も、同じ奥義への二重登録も破らない。
+        roster = Roster(
+            arcana(("A", 1), ("B", 1)),
+            [
+                Member("通し1", self.ALL),
+                Member("通し2", self.ALL),
+                Member("1戦のみ", self.FIRST_ONLY),
+            ],
+            slots_per_member=1,
+            carryover={"A": ["通し1", "通し2"], "B": ["1戦のみ"]},
+        )
+        result = allocate(roster, seed=127, carryover=roster.carryover)
+        for name, held in result.load.items():
+            self.assertLessEqual(len(held), 1, name)
+            self.assertEqual(len(held), len(set(held)), name)
+        for assignment in result.assignments:
+            self.assertEqual(
+                len(assignment.members),
+                len(set(assignment.members)),
+                assignment.arcanum,
+            )
+
+    def test_vanguard_only_arcanum_does_not_take_a_rearguard(self):
+        # 前衛向けの奥義には、前衛になれない人を引き抜いてこない。
+        roster = Roster(
+            arcana(("前衛技", 1, FIXED, False, True), ("A", 1)),
+            [
+                Member("前衛", self.FIRST_ONLY, vanguard=[True] * BATTLE_COUNT),
+                Member("後衛1", self.ALL),
+                Member("後衛2", self.ALL),
+            ],
+            slots_per_member=1,
+            carryover={"前衛技": ["前衛"], "A": ["後衛1", "後衛2"]},
+        )
+        result = allocate(roster, seed=128, carryover=roster.carryover)
+        van = result.assignments[0]
+        self.assertEqual(van.members, ["前衛"])
+
+
 class OutputExcludesVanguardTest(unittest.TestCase):
     """連合員の前衛設定は出力に載せない(奥義側の印は載せる)."""
 
@@ -1726,6 +2054,188 @@ class CarryoverStorageTest(unittest.TestCase):
         roster.carryover = {"神楽": ["A"]}
         self.assertTrue(roster.has_carryover())
         self.assertEqual(roster.carryover_size(), 1)
+
+
+class AllocationInvariantTest(unittest.TestCase):
+    """どんな盤面でも壊してはいけない約束.
+
+    段階5.7の引き抜きは担当を出し入れするので、取り消しの手順を間違えると
+    load(人→奥義)と担当(奥義→人)が食い違う。1人が同じ奥義を二重に持つと、
+    枠の勘定が合わなくなって以降の段階が例外で落ちる。
+    """
+
+    def _check(self, roster, result):
+        for name, held in result.load.items():
+            self.assertEqual(
+                len(held), len(set(held)), f"{name} が同じ奥義を二重に持っている: {held}"
+            )
+            self.assertLessEqual(
+                len(held), roster.slots_per_member, f"{name} の枠が上限を超えた: {held}"
+            )
+        for assignment in result.assignments:
+            self.assertEqual(
+                len(assignment.members),
+                len(set(assignment.members)),
+                f"{assignment.arcanum} に同じ人が二重に入っている",
+            )
+            for name in assignment.members:
+                self.assertIn(
+                    assignment.arcanum,
+                    result.load[name],
+                    f"{assignment.arcanum} の担当 {name} が load に無い",
+                )
+
+    def _roster(self, rng, people, slots, plain):
+        """枠がぎりぎりの盤面をランダムに作る. 引き抜きが何度も走る条件."""
+        return Roster(
+            arcana(
+                ("竜章", 2, FIXED, True, False, True),
+                ("兵法", 2, FIXED, True, False, True),
+                ("前衛技", 2, FIXED, False, True),
+                ("単騎", 1, FIXED),
+                *[(f"技{i}", 2, FIXED) for i in range(plain)],
+                ("連打", 2, FILL),
+            ),
+            [
+                Member(
+                    f"人{i}",
+                    [rng.choice(ATTENDANCE_LEVELS) for _ in range(BATTLE_COUNT)],
+                    vanguard=[rng.random() < 0.4 for _ in range(BATTLE_COUNT)],
+                )
+                for i in range(people)
+            ],
+            slots_per_member=slots,
+        )
+
+    def test_books_stay_straight_across_carryover_runs(self):
+        """人手より奥義が多い盤面を総当たりで回して、帳尻が合うか見る.
+
+        引き抜きを取り消すとき、埋め直しが本人を呼び戻していると担当が
+        二重登録になる。以降の段階が枠の勘定を誤り、例外で落ちる。
+        """
+        for people in (7, 8):
+            for slots in (2, 3, 4):
+                for plain in (6, 8, 10, 12):
+                    for trial in range(40):
+                        rng = random.Random(trial)
+                        roster = self._roster(rng, people, slots, plain)
+                        first = allocate(roster, seed=trial)
+                        self._check(roster, first)
+                        # 参戦状況が変わった翌日を、前回を起点に組み直す。
+                        for member in roster.members:
+                            for battle in range(BATTLE_COUNT):
+                                if rng.random() < 0.4:
+                                    member.attendance[battle] = rng.choice(
+                                        ATTENDANCE_LEVELS
+                                    )
+                        second = allocate(
+                            roster, seed=trial + 1, carryover=first.to_carryover()
+                        )
+                        self._check(roster, second)
+
+
+class CarryBaseTest(unittest.TestCase):
+    """「引き継いで割り振る」を続けて押しても、起点は「前回」のまま動かない.
+
+    押すたびに直前の結果へ乗り換えると、2回目からは「前回」が同じ日の1回目を
+    指してしまい、＊印と「担当が変わった人数」が実際より少なく出る。
+    """
+
+    def setUp(self):
+        try:
+            from arcanum_generator.gui import ArcanumApp
+        except Exception as exc:  # 画面を開けない環境ではこのテストは飛ばす
+            self.skipTest(f"tkinter を使えません: {exc}")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        try:
+            self.app = ArcanumApp(autosave_file=Path(self.tmp.name) / AUTOSAVE_NAME)
+        except Exception as exc:
+            self.skipTest(f"画面を開けません: {exc}")
+        self.addCleanup(self.app.destroy)
+        self.app.roster = Roster(
+            arcana(("神楽", 2), ("鼓舞", 2), ("疾風", 2)),
+            members(best=3, yes=3),
+        )
+
+    def _stars(self, result):
+        return {
+            (a.arcanum, name)
+            for a in result.assignments
+            for name in a.members
+            if result.carryover and result.carryover.is_new(a.arcanum, name)
+        }
+
+    def test_repeated_carry_runs_keep_the_same_starting_point(self):
+        self.app.run_allocation()  # 1日目をゼロから
+        base = {k: list(v) for k, v in self.app.roster.carryover.items()}
+
+        self.app.run_allocation(carry=True)
+        self.assertEqual(self.app.carry_base, base)
+        first = self.app.result
+
+        self.app.run_allocation(carry=True)
+        self.assertEqual(self.app.carry_base, base)  # 2回目も起点は動かない
+        second = self.app.result
+
+        # ＊は「前回」との差分。1回目との差分ではない。
+        for result in (first, second):
+            for arcanum, name in self._stars(result):
+                self.assertNotIn(name, base.get(arcanum, []))
+
+    def test_next_day_base_is_still_saved_for_tomorrow(self):
+        # 起点を据え置いても、保存される引き継ぎは最新の顔ぶれのまま。
+        self.app.run_allocation()
+        self.app.run_allocation(carry=True)
+        self.assertEqual(self.app.roster.carryover, self.app.result.to_carryover())
+
+    def test_fresh_allocation_becomes_the_new_starting_point(self):
+        # 「割り振る」でゼロから組み直したら、その顔ぶれが以降の「前回」。
+        self.app.run_allocation()
+        self.app.run_allocation(carry=True)
+        self.assertIsNotNone(self.app.carry_base)
+        self.app.run_allocation()  # ゼロから
+        self.assertIsNone(self.app.carry_base)
+        fresh = self.app.result.to_carryover()
+        self.app.run_allocation(carry=True)
+        self.assertEqual(self.app.carry_base, fresh)
+
+    def test_changed_member_count_does_not_shrink_on_the_second_press(self):
+        """2回続けて押しても「担当が変わった人数」が実際より少なくならない.
+
+        1日目のあと参戦できなくなった人がいる場面。その人の担当は1回目の
+        組み直しで外れる。2回目の起点が1回目の結果になっていると、その
+        入れ替えが「変わっていない」ことにされてしまう。
+        """
+        self.app.run_allocation()  # 1日目
+        base = {k: list(v) for k, v in self.app.roster.carryover.items()}
+        gone = {n for names in base.values() for n in names}
+        self.assertTrue(gone)
+        # 1日目に担当していた人のうち1人が、今日は出られなくなった。
+        dropped = sorted(gone)[0]
+        for member in self.app.roster.members:
+            if member.name == dropped:
+                member.attendance = [ATTEND_NO] * BATTLE_COUNT
+
+        self.app.run_allocation(carry=True)
+        self.app.run_allocation(carry=True)
+
+        report = self.app.result.carryover
+        # 出られなくなった人は、2回目でも「前回から外れた」と出る。
+        self.assertIn(dropped, report.changed_members())
+        self.assertTrue(report.member_removed.get(dropped))
+        self.assertNotIn(dropped, self.app.result.load.get(dropped, []))
+
+        before = {}
+        for arcanum, names in base.items():
+            for name in names:
+                before.setdefault(name, set()).add(arcanum)
+        expected = {
+            name
+            for name, held in self.app.result.load.items()
+            if before.get(name, set()) != set(held)
+        }
+        self.assertEqual(report.changed_members(), expected)
 
 
 if __name__ == "__main__":
