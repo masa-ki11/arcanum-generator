@@ -99,6 +99,9 @@ class ArcanumApp(tk.Tk):
         self.roster = Roster()
         self.result: AllocationResult | None = None
         self.current_path: Path | None = None
+        # 「前回」として引き継ぐ顔ぶれ. 同じ日に何度押しても動かさない。
+        # → carry_source()
+        self.carry_base: dict[str, list[str]] | None = None
         # テストから別の場所を指せるようにしておく(既定はプロジェクトフォルダ)。
         self.autosave_file = autosave_file or autosave_path()
         # 復元が終わるまでは書き戻さない(読み込み失敗時に空で上書きしないため)。
@@ -870,13 +873,29 @@ class ArcanumApp(tk.Tk):
         self._changed()
         self._update_status()
 
+    def carry_source(self) -> dict[str, list[str]]:
+        """引き継ぎの起点(「前回」の顔ぶれ)を返す.
+
+        初回は保存されている前回の割り振りを起点にし、以降はそれを据え置く。
+        押すたびに直前の結果へ乗り換えると、2回目からは「前回」が同じ日の
+        1回目を指してしまい、＊印と「担当が変わった人数」が実際より少なく出る。
+        起点を固定しておけば、組み直しは何度押しても前回との差分になり、
+        毎回ちがう組み合わせを引き直せる。
+
+        起点を引き直すのは、別のファイルを読み込んだときと、「割り振る」で
+        ゼロから組み直したとき。参戦状況の編集では動かさない — 編集が
+        次の日のぶんなのか打ち間違いの直しなのかは区別できないので、
+        動かさないほうに倒す(差分を多めに出すほうが、見落としより安全)。
+        """
+        if self.carry_base is None:
+            self.carry_base = {k: list(v) for k, v in self.roster.carryover.items()}
+        return {k: list(v) for k, v in self.carry_base.items()}
+
     def run_allocation(self, carry: bool = False) -> None:
         """割り振る. carry=True なら前回の担当を起点にして差分だけ埋め直す."""
         self._on_slots_changed()
         # 起点は先に控える。成功したら結果で上書きしてしまうため。
-        source = None
-        if carry:
-            source = {k: list(v) for k, v in self.roster.carryover.items()}
+        source = self.carry_source() if carry else None
         try:
             self.result = allocate(self.roster, carryover=source)
         except AllocationError as exc:
@@ -890,6 +909,9 @@ class ArcanumApp(tk.Tk):
         # 次の日の起点として残す。参戦状況を編集すると画面の結果は捨てられるが、
         # こちらは入力の一部として保存され、翌日の引き継ぎに使える。
         self.roster.carryover = self.result.to_carryover()
+        if not carry:
+            # ゼロから組み直したら、その顔ぶれが以降の「前回」になる。
+            self.carry_base = None
         self._autosave()
         self._refresh_result()
         self._update_status()
@@ -953,6 +975,7 @@ class ArcanumApp(tk.Tk):
         self.roster = Roster()
         self.current_path = None
         self.result = None
+        self.carry_base = None
         self.slots_var.set(self.roster.slots_per_member)
         self._autosave()
         self._refresh_all()
@@ -974,6 +997,7 @@ class ArcanumApp(tk.Tk):
             return
         self.current_path = Path(path)
         self.result = None
+        self.carry_base = None  # 読み込んだファイルの前回ぶんが以降の起点になる。
         self.slots_var.set(self.roster.slots_per_member)
         self._autosave()  # 読み込んだ内容を以降の自動保存先にも反映する。
         self._refresh_all()
